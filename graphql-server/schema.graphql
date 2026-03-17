@@ -1,0 +1,564 @@
+# Copyright (c) 2026 Wuji Labs Inc
+# ==================================================================
+# Playtiss - Internal GraphQL Schema v12 (Handle-Based API)
+#
+# 设计原则:
+# 此schema作为纯粹的数据访问层，服务于三个内部客户端：
+# 1. 客户端 (CLI / Web UI): 发起用户请求，查询最终状态。
+# 2. 工作流引擎 (Workflow Engine): 负责业务流程编排、缓存管理和高级流控制。
+# 3. 计算Worker (Worker): 负责执行单个可复用的计算任务(Task)。
+#
+# v12 核心变化:
+# - 引入稳定的 Execution Handle ID 和临时的 Job ID 双层ID体系
+# - 所有客户端mutations返回Job ID用于跟踪异步操作
+# - 客户端查询使用稳定的Handle ID而非内部revision ID
+# ==================================================================
+
+# ------------------------------------------------------------------
+# SCALARS & ENUMS: 基础类型定义
+# ------------------------------------------------------------------
+
+# 资产ID (内容的SHA256哈希值) 
+scalar AssetId
+
+# 追踪ID (基于UUIDv8的唯一标识符)，用于所有元数据实体 
+scalar TraceId
+
+# 系统动作ID (格式: core:action_name)，用于系统内置动作
+scalar SystemActionId
+
+# 动作ID (可以是TraceId或SystemActionId)
+scalar ActionId
+
+# 标准日期时间类型
+scalar Date
+
+# 代表任意JSON值（原始类型、数组、对象等），其内容作为资产存储
+scalar JSONAsset
+
+# 代表一个序列化为JSON的字典/对象，其内容作为资产存储
+scalar DictJSONAsset
+
+# 版本类型标签，用于区分不同性质的版本产物
+enum VersionType {
+  OUTPUT              # 计算任务的成功数据输出
+  ERROR               # 计算任务的失败结果
+  WORKFLOW_DEFINITION # 一个Action实现蓝图的具体版本
+  IMPLEMENTATION      # 一个"实现绑定"事件
+  REVISION            # 一次工作流修订版的完整状态容器 (原SNAPSHOT)
+}
+
+# 节点的依赖状态，用于描述数据一致性 
+enum DependencyStatus {
+  FRESH # 依赖的输入是最新的
+  STALE # 依赖的输入已过时，需要重新计算
+}
+
+# 节点或任务的运行时状态 
+enum RuntimeStatus {
+  # --- 通用状态 ---
+  IDLE              # 空闲，等待被执行
+  RUNNING           # 正在被一个Worker执行
+  FAILED            # 执行失败
+  
+  # --- 节点(Node)特有状态 ---
+  PENDING_PLAYER_INPUT # 等待Player（人或外部系统）输入
+  
+  # --- 任务(Task)特有状态 ---
+  PENDING             # 待执行，等待Worker认领
+  SUCCEEDED           # 计算成功
+}
+
+# ------------------------------------------------------------------
+# INPUT TYPES: 用于Mutations的输入对象
+# ------------------------------------------------------------------
+
+# 用于批量更新节点状态的输入对象
+input NodeStateUpdateInput {
+  nodeId: String!
+  dependencyStatus: DependencyStatus
+  runtimeStatus: RuntimeStatus
+  # 指定要更新的动态上下文实例
+  contextAssetHash: AssetId!
+  # 指定此节点所需的Task ID (v12新增)
+  requiredTaskId: TraceId
+  # 指定此节点最后计算的输入哈希 (v13新增)
+  lastInputsHash: AssetId
+  # 指定要更新的循环迭代实例
+  # iterationId: Int!  # TODO: 实现循环迭代功能
+}
+
+# ------------------------------------------------------------------
+# CORE DATA TYPES: 核心数据模型
+# ------------------------------------------------------------------
+
+# 任务: 系统中的一个长期存在的、可管理的单元。
+# 它可以是一个可复用的动作定义，或一个具体的计算节点。 
+type Task {
+  # 任务的唯一ID 
+  id: TraceId!
+  # 指向其执行的动作(Action)的ID
+  actionId: ActionId!
+  # 任务输入的内容哈希，指向包含任务输入数据的资产
+  inputsContentHash: AssetId!
+  # 任务的可读名称和描述，主要用于动作定义任务 
+  name: String
+  description: String
+  # 指向此任务当前最新的产物版本 
+  currentVersion: Version
+  createdAt: Date!
+}
+
+# 动作: 系统中的可复用动作定义，可以是系统内置或用户定义
+# 它保证了客户端（如CLI）只能看到和操作那些被设计为"可作为动作"的Task
+type Action {
+  # 动作的唯一ID，可以是TraceId（用户定义）或SystemActionId（系统动作）
+  id: ActionId!
+  # 动作的可读名称和描述
+  name: String
+  description: String
+  # 指向此动作当前最新的产物版本 
+  currentVersion: Version
+  createdAt: Date!
+}
+
+# 版本: 某个Task的一个具体、不可变的“产物”或“事件” 
+type Version {
+  # 版本的唯一ID 
+  id: TraceId!
+  # 此版本所属的Task ID 
+  taskId: TraceId!
+  # 版本的类型 
+  type: VersionType!
+  # 指向CAS中的资产哈希。对于implementation和revision类型，此项为null 
+  asset_content_hash: AssetId
+  # 指向同task下、同type的上一个版本，用于构建历史链 
+  parent_version_id: TraceId
+  # 对于implementation和revision类型，指向其执行的工作流定义版本 
+  executed_def_version_id: TraceId
+  # 创建时间
+  timestamp_created: Date!
+  # 用户为版本打的标签或提交信息
+  user_given_tag: String
+  commit_message: String
+}
+
+# 新增: 计算任务的实时执行状态
+# 用于Worker的调度、认领和故障恢复。
+type TaskExecutionState {
+  # 对应于Tasks表中的task_id
+  taskId: TraceId!
+  # 任务的实时计算状态: PENDING, RUNNING, SUCCEEDED, FAILED
+  runtimeStatus: RuntimeStatus!
+  # claim相关的租约信息
+  claim_timestamp: Date
+  claim_worker_id: String
+  claim_ttl_seconds: Int
+}
+
+# 运行实例节点状态: 描述一个节点在某次运行中的具体状态
+type WorkflowRevisionNodeState {
+  # 此节点所属的工作流修订版ID
+  workflowRevisionId: TraceId!
+  # 节点在工作流定义中的ID
+  nodeIdInWorkflow: String!
+  # 节点的上下文资产哈希 (v9新增)，用于区分动态调用实例
+  contextAssetHash: AssetId!
+  # 此节点所需的Task ID (v12新增)，用于反向查找
+  requiredTaskId: TraceId
+  # iterationId: Int!           # 用于区分while循环迭代 # TODO: 实现循环迭代功能
+  # 节点的依赖状态
+  dependencyStatus: DependencyStatus!
+  # 节点的运行时状态
+  runtimeStatus: RuntimeStatus!
+  # 此节点在本次修订版中最后使用的产出版本
+  lastUsedVersion: Version
+  # 此节点最后计算的输入哈希 (v13新增)，用于stale检测
+  # 存储节点inputs的Asset ID，允许直接加载和比较
+  lastInputsHash: AssetId
+}
+
+# 工作流修订版实例: 代表一次完整的工作流执行状态容器
+type WorkflowRevision {
+  # 修订版的唯一ID (即其对应的revision version id)
+  id: TraceId!
+  # 修订版的聚合状态，可由nodes的状态计算得出
+  status: String!
+  # 创建时间
+  createdAt: Date!
+  # 本次修订版包含的所有节点及其状态
+  nodes: [WorkflowRevisionNodeState!]!
+}
+
+# --- 分页相关类型 ---
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  endCursor: String
+  startCursor: String
+}
+
+type ActionConnection {
+  edges: [ActionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ActionEdge {
+  cursor: String!
+  node: Action!
+}
+
+type TaskConnection {
+  edges: [TaskEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TaskEdge {
+  cursor: String!
+  node: Task!
+}
+
+type WorkflowRevisionConnection {
+  edges: [WorkflowRevisionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type WorkflowRevisionEdge {
+  cursor: String!
+  node: WorkflowRevision!
+}
+
+type TaskExecutionStateConnection {
+  edges: [TaskExecutionStateEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TaskExecutionStateEdge {
+  cursor: String!
+  node: TaskExecutionState!
+}
+
+type WorkflowRevisionNodeStateConnection {
+  edges: [WorkflowRevisionNodeStateEdge!]!
+  pageInfo: PageInfo!
+}
+
+type WorkflowRevisionNodeStateEdge {
+  cursor: String!
+  node: WorkflowRevisionNodeState!
+}
+
+# --- 认证和用户信息 ---
+type AuthPayload {
+  token: String!
+}
+
+type Profile {
+  name: String!
+}
+
+# --- Interceptor Session (Phase 2 Chat IS Workflow) ---
+"""
+Represents an interceptor chat session that tracks workflow building state.
+Enables session resume and cross-turn reference resolution.
+"""
+type InterceptorSession {
+  # Unique session identifier
+  sessionId: String!
+  # Task ID for the session workflow definition (Layer 1)
+  sessionTaskId: TraceId!
+  # Task ID for the session execution (action = sessionTaskId)
+  computationTaskId: TraceId!
+  # Current REVISION version ID for tracking execution state
+  currentRevisionId: TraceId!
+  # JSON-serialized reference context for cross-turn references ($REF_X)
+  referenceContextJson: String
+  # JSON-serialized mapping from tool call IDs to task IDs
+  toolCallMappingJson: String
+  # When the session was created
+  createdAt: Date!
+  # Last activity timestamp
+  lastActivity: Date!
+}
+
+input InterceptorSessionInput {
+  sessionId: String!
+  sessionTaskId: TraceId!
+  computationTaskId: TraceId!
+  currentRevisionId: TraceId!
+  referenceContextJson: String
+  toolCallMappingJson: String
+}
+
+# ==================================================================
+# ROOT TYPES: Query, Mutation & Subscription
+# ==================================================================
+
+# ------------------------------------------------------------------
+# QUERIES
+# ------------------------------------------------------------------
+type Query {
+  # --- 通用API ---
+  getProfile: Profile! 
+
+  # --- APIs for Clients (CLI / Web UI) ---
+  # --- (新) 面向客户端的、基于句柄的查询API ---
+  # 获取某次特定修订版的详细状态，用于 `playtiss status <handle_id>` 和 Web UI
+  getWorkflowRevisionStatus(handleId: TraceId!): WorkflowRevision
+
+  # 获取执行结果，用于 `playtiss result <handle_id>`
+  getExecutionResult(handleId: TraceId!): Version
+
+  # 获取动作的详细信息，用于 `playtiss actions describe`
+  getActionDetails(actionId: ActionId!): Action
+
+  # 获取一个Task的静态定义信息
+  getTask(taskId: TraceId!): Task
+
+  # 获取一个Version的详细信息
+  getVersion(versionId: TraceId!): Version
+
+  # 列出所有可用的动作(Action)，用于 `playtiss actions list`
+  listActions(first: Int, after: String, last: Int, before: String): ActionConnection!
+
+  # 获取某个动作的所有计算实例Task，用于 `playtiss tasks list`
+  listTasksByAction(actionId: ActionId!, first: Int, after: String, last: Int, before: String): TaskConnection!
+
+  # 获取某个Task的所有历史修订版记录
+  listRevisionsForTask(taskId: TraceId!, first: Int, after: String, last: Int, before: String): WorkflowRevisionConnection!
+
+  # 获取特定版本ID对应的工作流修订版 (用于版本视图显示状态) - v15简化命名
+  getRevision(versionId: TraceId!): WorkflowRevision
+
+  # --- APIs for Workflow Engine ---
+  # 引擎用此接口查找需要它处理的修订版实例
+  findProcessableRevisions(first: Int, after: String, last: Int, before: String): WorkflowRevisionConnection! 
+  
+  # 获取工作流节点状态 (用于getTaskForNode查询)
+  getWorkflowRevisionNodeState(
+    workflowRevisionId: TraceId!
+    nodeIdInWorkflow: AssetId!
+    contextAssetHash: AssetId!
+  ): WorkflowRevisionNodeState
+
+  # 反向查找：根据Task ID查找所有使用该Task的工作流节点
+  # 可选的workflowRevisionId参数用于在服务器端过滤，提升性能
+  listWorkflowRevisionNodeStatesByTask(
+    taskId: TraceId!
+    workflowRevisionId: TraceId
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): WorkflowRevisionNodeStateConnection!
+
+  # 反向查找：根据Task ID查找所有"活跃"的工作流节点
+  # "活跃"指该节点所属的workflow_revision_id是其对应工作流实例Task的最新revision版本
+  listActiveWorkflowRevisionNodeStatesByTask(
+    taskId: TraceId!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): WorkflowRevisionNodeStateConnection!
+
+  # 获取特定工作流修订版中某个节点的状态
+  # 用于pipeline-runner检查节点是否已经执行
+  getNodeState(
+    workflowRevisionId: TraceId!
+    nodeId: String!
+    contextAssetHash: AssetId!
+  ): WorkflowRevisionNodeState
+
+  # --- APIs for Workflow Engine - Merge Accumulator Queries ---
+  # 引擎用这些查询来获取merge节点的状态（用于调试）
+
+  """
+  获取当前merge accumulator状态（用于调试）。
+  """
+  getMergeAccumulator(
+    pipelineId: AssetId!
+    workflowRevisionId: TraceId!
+    contextAssetHash: AssetId!
+    nodeId: String!
+  ): DictJSONAsset
+
+  # --- APIs for Workers ---
+  # Worker用此接口查找待执行的计算任务 (查询TaskExecutionStates)
+  findRunnableTasks(actionId: ActionId, first: Int, after: String, last: Int, before: String): TaskExecutionStateConnection!
+
+  # 获取任务的实时执行状态 (用于检查redelivery场景)
+  getTaskExecutionState(taskId: TraceId!): TaskExecutionState
+
+  # --- APIs for Interceptor (Phase 2 Chat IS Workflow) ---
+  """
+  Get an interceptor session by session ID.
+  Returns null if session doesn't exist.
+  """
+  getInterceptorSession(sessionId: String!): InterceptorSession
+}
+
+# ------------------------------------------------------------------
+# MUTATIONS
+# ------------------------------------------------------------------
+type Mutation {
+  # --- 通用API ---
+  login(username: String!, password: String!): AuthPayload!
+
+  # --- APIs for Clients (CLI / Web UI) ---
+  # 这些API用于提交用户意图，由Workflow Engine异步处理
+
+  """
+  请求一次执行，立即返回一个稳定的运行句柄ID。
+  这是所有用户请求的统一入口，用于 `playtiss run <action_id> ...`。
+  """
+  requestExecution(actionId: ActionId!, input: DictJSONAsset!): TraceId!
+  
+  """
+  请求重跑一个节点，返回Job ID用于跟踪此操作。
+  使用Handle ID而非内部运行ID。
+  """
+  requestNodeRerun(handleId: TraceId!, nodeId: String!, contextAssetHash: AssetId, commitMessage: String, userTag: String): TraceId!
+
+  """
+  请求更新过时的节点，返回Job ID用于跟踪此操作。
+  如果提供nodeIds，则仅更新指定的节点。
+  如果nodeIds为null，则更新所有过时的节点。
+
+  实现说明：
+  - 创建新的Revision Version作为WI Task的新current_version_id
+  - 复制所有WorkflowRevisionNodeStates到新revision（STALE状态保持不变）
+  - 创建core:orchestrate_update_stale Job Task并立即完成
+  - 发出stale_update_revision_created事件供pipeline-runner处理
+  """
+  requestStaleNodesUpdate(handleId: TraceId!, nodeIds: [String!]): TraceId! 
+  
+  """
+  允许Player（人或外部系统）直接为一个节点提供结果作为状态覆写机制。
+  这个操作会绕过节点的常规计算和Task缓存，直接创建一个新的Output Version，
+  并用它来更新指定节点的运行实例状态，从而驱动工作流继续。
+  是实现人工干预、故障恢复和调试的关键API。
+  返回Job ID用于跟踪此操作。
+  """
+  submitPlayerInput(handleId: TraceId!, nodeId: String!, contextAssetHash: AssetId, outputAssetId: AssetId!, commitMessage: String): TraceId!
+  
+  """
+  将一个需要Player输入的节点标记为失败。
+  返回Job ID用于跟踪此操作。
+  """
+  failPlayerTask(handleId: TraceId!, nodeId: String!, contextAssetHash: AssetId, reason: String!): TraceId!
+
+  """
+  [Internal] 工作流引擎专用。
+  执行"分叉"操作：固化当前修订版，并创建一个包含当前所有状态副本的新修订版。
+  用于在发生重投递或状态干预时保留历史。
+  返回新的修订版ID (即新的 workflowRevisionId)。
+
+  v14 Copy-on-Write Revision机制核心原语 (v15重命名)。
+  """
+  forkWorkflowRevision(taskId: TraceId!, currentRevisionId: TraceId!, triggerReason: String): TraceId!
+
+  # --- APIs for Action and Workflow Definition Building ---
+  # 这些API支持CLI工具进行交互式工作流定义构建
+  
+  # 创建一个新的动作定义任务，响应 `action add`
+  createAction(name: String!, description: String!): Action!
+  
+  # 为动作创建或更新工作流定义版本，响应 pipeline 构建操作
+  createWorkflowDefinitionVersion(actionId: TraceId!, workflowDefinition: DictJSONAsset!, commitMessage: String): Version!
+
+  # --- APIs for Workflow Engine ---
+  # 引擎使用这些API来更新编排决策的结果
+
+  # 当引擎发现一个全新的计算组合时，用此创建Task记录
+  createComputationalTask(actionId: ActionId!, uniquenessHash: AssetId!): Task!
+  
+  # 引擎最核心的写操作，批量更新一个修订版中多个节点的状态
+  updateNodeStates(revisionId: TraceId!, nodeUpdates: [NodeStateUpdateInput!]!): WorkflowRevision!
+
+  # 引擎调度Task到TaskExecutionStates表中等待Worker认领
+  scheduleTaskForExecution(taskId: TraceId!): TaskExecutionState!
+
+  # --- APIs for Workflow Engine - Merge Accumulator Operations ---
+  # 引擎使用这些API管理merge节点的状态累积
+
+  """
+  原子性覆写merge accumulator状态。
+  用于merge节点接收所有输入后变为ready状态时。
+  """
+  setMergeAccumulator(
+    pipelineId: AssetId!
+    workflowRevisionId: TraceId!
+    contextAssetHash: AssetId!
+    nodeId: String!
+    accumulatorData: DictJSONAsset!
+  ): Boolean!
+
+  """
+  原子性merge更新：读取当前状态、更新一个key、写回。
+  返回更新后的accumulator状态。
+  用于merge节点接收部分输入时。
+  value参数可以是任意JSON值（原始类型、数组、对象等）。
+  """
+  mergeMergeAccumulator(
+    pipelineId: AssetId!
+    workflowRevisionId: TraceId!
+    contextAssetHash: AssetId!
+    nodeId: String!
+    key: String!
+    value: JSONAsset!
+  ): DictJSONAsset!
+
+  """
+  删除merge accumulator（当task被调度时）。
+  """
+  deleteMergeAccumulator(
+    pipelineId: AssetId!
+    workflowRevisionId: TraceId!
+    contextAssetHash: AssetId!
+    nodeId: String!
+  ): Boolean!
+
+  # --- APIs for Workers ---
+  # Worker使用这些API来认领任务和汇报结果
+
+  # Worker调用此接口以原子方式认领一个Task的执行权
+  claimTask(taskId: TraceId!, workerId: String!, ttl: Int!): TaskExecutionState
+  
+  # Workflow Engine调用此接口认领workflow任务并生成快照版本ID作为workflowRevisionId
+  claimWorkflowTask(taskId: TraceId!, workerId: String!, ttl: Int!): TaskExecutionState
+  
+  # Worker执行完毕后，调用此接口创建产物版本记录
+  createVersion(taskId: TraceId!, versionType: VersionType!, asset_content_hash: AssetId, commit_message: String): Version!
+  
+  # Worker成功执行完成后调用此接口汇报结果
+  reportTaskSuccess(taskId: TraceId!, resultVersionId: TraceId!, workerId: String!): TaskExecutionState!
+
+  # Worker执行失败后调用此接口汇报错误
+  reportTaskFailure(taskId: TraceId!, errorVersionId: TraceId!, workerId: String!): TaskExecutionState!
+  
+  # Worker调用此接口重置已完成的任务状态回到PENDING，允许重新执行
+  refreshTask(taskId: TraceId!): TaskExecutionState!
+
+  # --- APIs for Interceptor (Phase 2 Chat IS Workflow) ---
+  """
+  Save or update an interceptor session.
+  Creates a new session if sessionId doesn't exist, updates if it does.
+  """
+  saveInterceptorSession(input: InterceptorSessionInput!): InterceptorSession!
+}
+
+# ------------------------------------------------------------------
+# SUBSCRIPTIONS
+# ------------------------------------------------------------------
+type Subscription {
+  # --- 实时订阅API，用于Web UI ---
+  """实时监听一个运行句柄其最新修订版的状态变化。"""
+  workflowRevisionUpdated(handleId: TraceId!): WorkflowRevision!
+
+  """实时监听节点状态变化。"""
+  nodeStateUpdated(handleId: TraceId!, nodeId: String!, contextAssetHash: AssetId): WorkflowRevisionNodeState!
+
+  # 实时监听Task执行状态变化
+  taskExecutionUpdated(taskId: TraceId!): TaskExecutionState!
+}

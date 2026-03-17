@@ -1,0 +1,47 @@
+{
+  "name": "@playtiss/typescript-worker",
+  "version": "1.0.0",
+  "description": "TypeScript Compute Worker for Playtiss v3.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "codegen": "graphql-codegen --config codegen.ts",
+    "prebuild": "pnpm run codegen",
+    "build": "tsc",
+    "prestart": "pnpm run codegen && pnpm run build",
+    "start": "node dist/index.js",
+    "dev": "pnpm run codegen && tsx src/index.ts",
+    "dev:add-two": "pnpm run codegen && tsx src/sample_add_two.ts",
+    "test": "vitest",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist src/__generated__"
+  },
+  "dependencies": {
+    "@apollo/client": "^3.8.0",
+    "dotenv": "catalog:",
+    "graphql": "catalog:",
+    "playtiss": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@graphql-codegen/cli": "^5.0.0",
+    "@graphql-codegen/client-preset": "^4.1.0",
+    "@graphql-typed-document-node/core": "catalog:",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "globals": "catalog:",
+    "tsx": "^3.14.0",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "^0.34.0"
+  },
+  "keywords": [
+    "playtiss",
+    "worker",
+    "graphql",
+    "typescript",
+    "task-execution"
+  ],
+  "author": "Playtiss Team",
+  "license": "SEE LICENSE IN LICENSE"
+}

@@ -1,0 +1,39 @@
+{
+  "name": "playtiss-monorepo",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "type": "module",
+  "description": "Playtiss AI Workflow Orchestration SDK",
+  "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "pnpm@10.26.2",
+  "scripts": {
+    "build": "pnpm --filter playtiss build && pnpm --filter @playtiss/typescript-worker build && pnpm --filter graphql-server --filter pipeline-runner --filter @playtiss/compiler build",
+    "clean": "pnpm -r clean",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "globals": "catalog:",
+    "ts-node": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "^4.0.15"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild@<=0.24.2": ">=0.25.0"
+    },
+    "onlyBuiltDependencies": [
+      "@apollo/protobufjs",
+      "esbuild",
+      "sqlite3",
+      "unrs-resolver"
+    ]
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "name": "playtiss",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./asset-store": {
+      "types": "./dist/asset-store/index.d.ts",
+      "import": "./dist/asset-store/index.js"
+    },
+    "./asset-store/storage-factory": {
+      "types": "./dist/asset-store/storage-factory.d.ts",
+      "import": "./dist/asset-store/storage-factory.js"
+    },
+    "./asset-store/local": {
+      "types": "./dist/asset-store/local/index.d.ts",
+      "import": "./dist/asset-store/local/index.js"
+    },
+    "./asset-store/s3": {
+      "types": "./dist/asset-store/s3/index.d.ts",
+      "import": "./dist/asset-store/s3/index.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./types/json": {
+      "types": "./dist/types/json.d.ts",
+      "import": "./dist/types/json.js"
+    },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.ts",
+      "import": "./dist/pipeline/index.js"
+    },
+    "./pipeline/parser": {
+      "types": "./dist/pipeline/parser.d.ts",
+      "import": "./dist/pipeline/parser.js"
+    },
+    "./types/text": {
+      "types": "./dist/types/text.d.ts",
+      "import": "./dist/types/text.js"
+    },
+    "./utils/promise_map": {
+      "types": "./dist/utils/promise_map.d.ts",
+      "import": "./dist/utils/promise_map.js"
+    },
+    "./types/reference": {
+      "types": "./dist/types/reference.d.ts",
+      "import": "./dist/types/reference.js"
+    },
+    "./types/trace_id": {
+      "types": "./dist/types/trace_id.d.ts",
+      "import": "./dist/types/trace_id.js"
+    },
+    "./types/playtiss": {
+      "types": "./dist/types/playtiss.d.ts",
+      "import": "./dist/types/playtiss.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/credential-providers": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "@smithy/types": "catalog:"
+  },
+  "optionalDependencies": {
+    "dotenv": "catalog:",
+    "sqlite": "catalog:",
+    "sqlite3": "catalog:"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/fs-extra": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "^1.6.1",
+    "fs-extra": "^11.3.2",
+    "globals": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "^1.6.1"
+  },
+  "vitest": {
+    "environment": "node",
+    "include": [
+      "test/**/*.test.ts"
+    ],
+    "coverage": {
+      "provider": "v8",
+      "reporter": [
+        "text",
+        "json",
+        "html"
+      ],
+      "thresholds": {
+        "branches": 90,
+        "functions": 90,
+        "lines": 90,
+        "statements": 90
+      }
+    }
+  }
+}

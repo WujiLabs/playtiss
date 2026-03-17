@@ -1,0 +1,64 @@
+{
+  "name": "pipeline-runner",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "codegen": "graphql-codegen --config codegen.ts",
+    "compile": "npm run codegen && tsc",
+    "prebuild": "pnpm run compile",
+    "prestart": "pnpm run compile",
+    "build": "tsc",
+    "start": "node ./dist/src/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "SEE LICENSE IN LICENSE",
+  "dependencies": {
+    "@apollo/client": "^3.13.8",
+    "@graphql-typed-document-node/core": "catalog:",
+    "dotenv": "catalog:",
+    "graphql": "catalog:",
+    "lru-cache": "catalog:",
+    "p-limit": "catalog:",
+    "playtiss": "workspace:*",
+    "react": "catalog:",
+    "sqlite3": "catalog:"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@graphql-codegen/cli": "^5.0.2",
+    "@graphql-codegen/client-preset": "^4.2.5",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/jest": "catalog:",
+    "@types/node": "catalog:",
+    "@types/sqlite3": "catalog:",
+    "globals": "catalog:",
+    "jest": "catalog:",
+    "jest-environment-node": "catalog:",
+    "ts-jest": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "useESM": true
+        }
+      ]
+    }
+  }
+}

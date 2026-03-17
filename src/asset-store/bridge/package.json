@@ -1,0 +1,26 @@
+{
+  "name": "playtiss-bridge-server",
+  "version": "1.0.0",
+  "description": "Bridge server for Playtiss asset store in UXP environments",
+  "type": "module",
+  "main": "bridge-server.js",
+  "scripts": {
+    "start": "node bridge-server.js",
+    "dev": "node bridge-server.js 3000 local",
+    "dev:s3": "node bridge-server.js 3000 s3"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "cors": "^2.8.5",
+    "playtiss": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.17",
+    "@types/multer": "^1.4.7",
+    "@types/cors": "^2.8.13"
+  },
+  "keywords": ["playtiss", "bridge", "uxp", "asset-store"],
+  "author": "Playtiss Team",
+  "license": "MIT"
+}
