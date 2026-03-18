@@ -3,55 +3,26 @@
 // Original source / algorithm or asset licensed from:
 // Pinscreen, Inc.
 // https://www.pinscreen.com/
-import type { DictLazyAsset, LazyAsset } from '../index.js'
-import { CompoundAssetReference } from './reference.js'
+import type { AssetId } from './asset_id.js'
+import { type AssetValue, type DictAsset } from './asset_value.js'
 
-export type ValueOrRef<T> = T | CompoundAssetReference<T>
+// ValueOrRef<T>: either an inline value or a CID string pointing to a stored asset.
+// Replaces the old T | CompoundAssetReference<T> pattern.
+export type ValueOrRef<T> = T | AssetId
 
 export type Creator
   = | string
-    | DictLazyAsset
-    | CompoundAssetReference<DictLazyAsset>
-// ensure that all values are LazyAsset type
-// as a result, there's no member function
-// type ValueIsLazyAsset<T> = {
-//   [key in keyof T]: LazyAsset;
-// }
+    | DictAsset
+    | AssetId
 
-// export interface NodeBase<T extends ValueIsLazyAsset<T>> {
-//   creator: Creator
-//   timestamp: number // integer
-//   asset_type: string
-// }
-
-export interface Action extends DictLazyAsset {
+export interface Action extends DictAsset {
   creator: Creator
   timestamp: number // integer
   asset_type: 'action'
   description: string
-  input_shape: LazyAsset
-  output_shape: LazyAsset
+  input_shape: AssetValue
+  output_shape: AssetValue
 }
-
-// export interface PendingTask extends NodeBase<PendingTask> {
-//   asset_type: 'pending_task'
-//   // PendingTask does not include timestamp
-//   // The creation of such action+input combination
-//   // is only inferred via event record
-//   timestamp: 0
-//   action: ValueOrRef<Action>
-//   input: DictLazyAsset
-// }
-
-// export interface Task extends NodeBase<Task> {
-//   asset_type: 'task'
-//   // Task does not include timestamp
-//   // The creation of such action+input combination
-//   // is only inferred via event record
-//   timestamp: 0
-//   action: ValueOrRef<Action>
-//   input: DictLazyAsset
-// }
 
 export type EventType
   // task is created and finshed synchronously
@@ -71,11 +42,3 @@ export type EventType
     | 'update'
     | 'start'
     | 'stop'
-
-// export interface Event<T extends EventType = EventType>
-//   extends NodeBase<Event<T>> {
-//   asset_type: 'event'
-//   task: ValueOrRef<Task>
-//   event_type: T
-//   output: LazyAsset
-// }

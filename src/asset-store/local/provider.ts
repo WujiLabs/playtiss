@@ -1,6 +1,10 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId } from '../../index.js'
-import { type StorageConfig } from '../config.js'
+import fs_sync from 'fs'
+import fs from 'fs/promises'
+import { homedir } from 'os'
+import path from 'path'
+import { isAssetId, type AssetId } from '../../index.js'
+import { getConfig, type StorageConfig } from '../config.js'
 import {
   type AssetReferences,
   type StorageProvider,
@@ -11,43 +15,54 @@ import {
   saveAssetToActionReferences,
   saveAssetToVersionReferences,
 } from './asset-db.js'
-import { fetch_buffer, has_buffer, save_buffer } from './store.js'
 
+/**
+ * Local filesystem storage provider for Playtiss assets.
+ *
+ * Stores CID-addressed content as files organized in a two-level
+ * directory hierarchy derived from the asset identifier prefix.
+ * Metadata and cross-asset references are persisted to a co-located
+ * SQLite database (see asset-db).
+ */
 export class LocalStorageProvider implements StorageProvider {
+  /** Resolved root directory – populated lazily on first I/O call. */
+  private storeDir: string | null = null
+
   constructor(private readonly config: StorageConfig) {
-    // Validation happens lazily when operations are actually called
     console.info(`LocalStorageProvider initialized: type=local`)
+    // Kick off (but don't block on) directory resolution so
+    // the first real operation is fast in the common case.
+    this.resolveStoreDir().catch(console.error)
   }
 
+  // ---------------------------------------------------------------------------
+  // StorageProvider interface
+  // ---------------------------------------------------------------------------
+
   async hasBuffer(id: AssetId): Promise<boolean> {
+    this.assertValidId(id)
+    const bufferPath = await this.bufferPath(id)
     try {
-      return await has_buffer(id)
+      await fs.access(bufferPath, fs_sync.constants.R_OK)
+      return true
     }
-    catch (error: any) {
-      const message = `LocalStorageProvider.hasBuffer failed for asset ${id}: ${error.message}`
-      console.error(message)
-      if (error.message?.includes('Cannot find module')) {
-        throw new Error(
-          `Local storage requires Node.js environment. Use PLAYTISS_STORAGE_TYPE=s3 for web environments.`,
-        )
-      }
-      throw error
+    catch {
+      return false
     }
   }
 
   async fetchBuffer(id: AssetId): Promise<Uint8Array> {
+    this.assertValidId(id)
+    const bufferPath = await this.bufferPath(id)
     try {
-      return await fetch_buffer(id)
+      const buf = await fs.readFile(bufferPath)
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
     }
-    catch (error: any) {
-      const message = `LocalStorageProvider.fetchBuffer failed for asset ${id}: ${error.message}`
-      console.error(message)
-      if (error.message?.includes('Cannot find module')) {
-        throw new Error(
-          `Local storage requires Node.js environment. Use PLAYTISS_STORAGE_TYPE=s3 for web environments.`,
-        )
-      }
-      throw error
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') throw new Error(`Asset ${id} not found in local storage`)
+      if (code === 'EACCES') throw new Error(`Permission denied reading asset ${id}`)
+      throw e
     }
   }
 
@@ -56,55 +71,88 @@ export class LocalStorageProvider implements StorageProvider {
     id: AssetId,
     references?: AssetReferences,
   ): Promise<void> {
+    this.assertValidId(id)
     try {
-      await save_buffer(buffer, id)
-      // Save to database after successful storage
+      // Write blob to disk
+      const [folderPath, bufferPath] = await this.assetPaths(id)
+      await fs.mkdir(folderPath, { recursive: true })
+      await fs.writeFile(bufferPath, Buffer.from(buffer))
+
+      // Persist metadata row
       await saveAssetRecord(id, buffer)
 
-      // Save references if provided
+      // Persist any supplied cross-asset references
       if (references) {
-        if (
-          references.assetReferences
-          && references.assetReferences.length > 0
-        ) {
-          await saveAssetReferences(id, references.assetReferences)
-          console.debug(
-            `Saved ${references.assetReferences.length} asset references for ${id}`,
-          )
-        }
-        if (
-          references.actionReferences
-          && references.actionReferences.length > 0
-        ) {
-          await saveAssetToActionReferences(id, references.actionReferences)
-          console.debug(
-            `Saved ${references.actionReferences.length} action references for ${id}`,
-          )
-        }
-        if (
-          references.versionReferences
-          && references.versionReferences.length > 0
-        ) {
-          await saveAssetToVersionReferences(id, references.versionReferences)
-          console.debug(
-            `Saved ${references.versionReferences.length} version references for ${id}`,
-          )
-        }
+        await this.persistReferences(id, references)
       }
 
       console.debug(
-        `LocalStorageProvider successfully saved asset ${id} (${buffer.length} bytes)`,
+        `LocalStorageProvider saved asset ${id} (${buffer.length} bytes)`,
       )
     }
-    catch (error: any) {
-      const message = `LocalStorageProvider.saveBuffer failed for asset ${id}: ${error.message}`
-      console.error(message)
-      if (error.message?.includes('Cannot find module')) {
-        throw new Error(
-          `Local storage requires Node.js environment. Use PLAYTISS_STORAGE_TYPE=s3 for web environments.`,
-        )
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EACCES') {
+        throw new Error(`Permission denied writing asset ${id}`)
       }
-      throw error
+      throw e
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lazily resolve (and cache) the root storage directory.
+   * Falls back to `~/.playtiss` when no explicit path is configured.
+   */
+  private async resolveStoreDir(): Promise<string> {
+    if (!this.storeDir) {
+      const cfg = await getConfig()
+      this.storeDir = cfg.localPath ?? path.join(homedir(), '.playtiss')
+      fs_sync.mkdirSync(this.storeDir, { recursive: true })
+    }
+    return this.storeDir
+  }
+
+  /** Return `[folderPath, filePath]` for the given asset. */
+  private async assetPaths(id: AssetId): Promise<[string, string]> {
+    const dir = await this.resolveStoreDir()
+    const folder = path.join(dir, id.slice(0, 2), id.slice(2, 4))
+    const file = path.join(folder, id.slice(4))
+    return [folder, file]
+  }
+
+  /** Shorthand that only needs the file path. */
+  private async bufferPath(id: AssetId): Promise<string> {
+    const [, p] = await this.assetPaths(id)
+    return p
+  }
+
+  private assertValidId(id: AssetId): void {
+    if (!isAssetId(id)) throw new Error(`Invalid asset ID: ${id}`)
+  }
+
+  /** Persist the three reference flavours in parallel when present. */
+  private async persistReferences(
+    id: AssetId,
+    refs: AssetReferences,
+  ): Promise<void> {
+    const tasks: Promise<void>[] = []
+
+    if (refs.assetReferences?.length) {
+      tasks.push(saveAssetReferences(id, refs.assetReferences))
+    }
+    if (refs.actionReferences?.length) {
+      tasks.push(saveAssetToActionReferences(id, refs.actionReferences))
+    }
+    if (refs.versionReferences?.length) {
+      tasks.push(saveAssetToVersionReferences(id, refs.versionReferences))
+    }
+
+    if (tasks.length) {
+      await Promise.all(tasks)
+      console.debug(`LocalStorageProvider persisted ${tasks.length} reference set(s) for ${id}`)
     }
   }
 }

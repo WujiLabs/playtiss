@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { toAssetId, type AssetId } from 'playtiss'
+import { type AssetId } from 'playtiss'
 import { store } from 'playtiss/asset-store'
 
 // Cache the default context asset ID to avoid re-computing it
@@ -13,7 +13,7 @@ let _defaultContextAssetId: AssetId | null = null
 export async function getDefaultContextAssetId(): Promise<AssetId> {
   if (_defaultContextAssetId === null) {
     // Store an empty object and cache the result
-    _defaultContextAssetId = toAssetId(await store({}))
+    _defaultContextAssetId = await store({})
     console.log('Created default context asset:', _defaultContextAssetId)
   }
   return _defaultContextAssetId

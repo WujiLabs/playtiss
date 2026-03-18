@@ -6,9 +6,9 @@ import {
   getSystemActionDefinitions,
   isSystemAction,
   type ActionId,
-  type DictLazyAsset,
+  type DictAsset,
 } from 'playtiss'
-import { parseAssetText } from 'playtiss/types/json'
+import { decodeFromString } from 'playtiss/types/json'
 import type { UserActionId } from 'playtiss/types/playtiss'
 import { isTraceId } from 'playtiss/types/trace_id'
 import type {
@@ -1473,7 +1473,7 @@ export const getMergeAccumulator = async (
     contextAssetHash: AssetId
     nodeId: string
   },
-): Promise<DictLazyAsset | null> => {
+): Promise<DictAsset | null> => {
   const { pipelineId, workflowRevisionId, contextAssetHash, nodeId } = args
   const db = getDB()
 
@@ -1490,7 +1490,7 @@ export const getMergeAccumulator = async (
         }
 
         try {
-          const result = parseAssetText(row.accumulator_json) as DictLazyAsset
+          const result = decodeFromString(row.accumulator_json) as DictAsset
           resolve(result)
         }
         catch (parseErr) {

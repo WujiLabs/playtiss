@@ -15,16 +15,14 @@
 import { LRUCache } from 'lru-cache'
 import {
   type AssetId,
-  CompoundAssetReference,
-  type DictLazyAsset,
-  type LazyAsset,
-  toAssetId,
+  type AssetValue,
+  type DictAsset,
   type TraceId,
   type ValueOrRef,
 } from 'playtiss'
-import { load, store, toReference } from 'playtiss/asset-store'
+import { load, store } from 'playtiss/asset-store'
 import { type Node, type Pipeline } from 'playtiss/pipeline'
-import { jsonify } from 'playtiss/types/json'
+import { encodeToString } from 'playtiss/types/json'
 
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
 import { getLimiter } from '../utils/concurrency-limiter.js'
@@ -37,7 +35,7 @@ import type { Task } from '../graphql/types.js'
 /**
  * V12 Context - no longer includes "%id" since workflow task info is passed separately
  */
-export type V12Context = Record<string, LazyAsset>
+export type V12Context = DictAsset
 
 /**
  * V12 Workflow Execution Context - passed to all model functions
@@ -88,8 +86,8 @@ export function getSharedGraphQLClient(): PipelineGraphQLClient {
  * Context is typically {} (empty object) for most workflows, leading to massive
  * S3 request duplication. This cache eliminates the bottleneck.
  *
- * Key: JSON.stringify(jsonify(context)) - stable representation that handles:
- *   - CompoundAssetReferences (converted to .ref strings)
+ * Key: encodeToString(context) - stable representation that handles:
+ *   - CID links (encoded as dag-json)
  *   - Nested objects and arrays
  *   - No S3 calls during cache key generation!
  *
@@ -109,8 +107,8 @@ const contextHashCache = new LRUCache<string, Promise<AssetId>>({
  * Promise deduplication: Merges concurrent identical requests
  */
 export async function getContextAssetHash(context: V12Context): Promise<AssetId> {
-  // Use jsonify() to create stable cache key (converts refs to strings, no S3 calls)
-  const cacheKey = JSON.stringify(jsonify(context))
+  // Use encodeToString() to create stable cache key (dag-json encoding, no S3 calls)
+  const cacheKey = encodeToString(context)
 
   // Check for in-flight or resolved promise
   const cachedPromise = contextHashCache.get(cacheKey)
@@ -121,7 +119,7 @@ export async function getContextAssetHash(context: V12Context): Promise<AssetId>
   // Cache miss - create and cache promise
   const s3StoreLimiter = getLimiter('s3-store')
   const hashPromise = s3StoreLimiter(async () => {
-    return toAssetId(await store(context))
+    return await store(context)
   })
 
   contextHashCache.set(cacheKey, hashPromise)
@@ -209,9 +207,9 @@ export async function getWorkflowTaskIdFromRevisionId(
  * @param dependencyStatus - Dependency status: "FRESH" for first run/player input, "STALE" for recreation
  */
 export async function createTaskRecord(
-  _pipeline: CompoundAssetReference<Pipeline>,
+  _pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node>,
+  node: AssetId,
   task: Task,
   workflowContext: V12WorkflowExecutionContext,
   lastInputsHash: AssetId,
@@ -246,7 +244,7 @@ export async function createTaskRecord(
     workflowContext.workflowRevisionId,
     [
       {
-        nodeId: node.id,
+        nodeId: node,
         dependencyStatus: dependencyStatus,
         runtimeStatus: runtimeStatus, // RUNNING/IDLE/FAILED based on task execution state
         contextAssetHash: contextAssetHash,
@@ -257,11 +255,11 @@ export async function createTaskRecord(
   )
 
   if (!success) {
-    throw new Error(`Failed to update node state for ${node.id}`)
+    throw new Error(`Failed to update node state for ${node}`)
   }
 
   console.log(
-    `✅ Created task record: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, task=${task.id}, inputsHash=${lastInputsHash}, depStatus=${dependencyStatus}, runtimeStatus=${runtimeStatus}`,
+    `✅ Created task record: workflow=${workflowContext.workflowRevisionId}, node=${node}, task=${task.id}, inputsHash=${lastInputsHash}, depStatus=${dependencyStatus}, runtimeStatus=${runtimeStatus}`,
   )
 }
 
@@ -270,11 +268,11 @@ export async function createTaskRecord(
  * Replaces: getTask()
  */
 export async function getTaskInputs(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node> | null, // null indicates pipeline output
+  node: AssetId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
-): Promise<DictLazyAsset | null> {
+): Promise<DictAsset | null> {
   if (!node) {
     // Pipeline output tasks are not tracked in WorkflowRevisionNodeStates
     return null
@@ -287,13 +285,13 @@ export async function getTaskInputs(
   // Query WorkflowRevisionNodeStates to find the task for this node
   const nodeState = await graphqlClient.getWorkflowRevisionNodeState(
     workflowContext.workflowRevisionId,
-    node.id,
+    node,
     contextAssetHash,
   )
 
   if (!nodeState?.requiredTaskId) {
     console.log(
-      `🔍 No task found for: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, context=${contextAssetHash}`,
+      `🔍 No task found for: workflow=${workflowContext.workflowRevisionId}, node=${node}, context=${contextAssetHash}`,
     )
     return null
   }
@@ -303,15 +301,15 @@ export async function getTaskInputs(
 
   if (!task?.inputsContentHash) {
     console.log(
-      `🔍 No inputsContentHash found for: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, task=${nodeState.requiredTaskId}`,
+      `🔍 No inputsContentHash found for: workflow=${workflowContext.workflowRevisionId}, node=${node}, task=${nodeState.requiredTaskId}`,
     )
     return null
   }
 
   console.log(
-    `✅ Found task: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, task=${nodeState.requiredTaskId}`,
+    `✅ Found task: workflow=${workflowContext.workflowRevisionId}, node=${node}, task=${nodeState.requiredTaskId}`,
   )
-  return (await load(`@${task.inputsContentHash}`)) as DictLazyAsset
+  return (await load(task.inputsContentHash as AssetId)) as unknown as DictAsset
 }
 
 /**
@@ -320,7 +318,7 @@ export async function getTaskInputs(
  * @param workflowRevisionId Optional workflow revision ID for server-side filtering optimization
  */
 export async function getTaskRecords(
-  _pipeline: CompoundAssetReference<Pipeline>,
+  _pipeline: AssetId,
   task: Task,
   workflowRevisionId?: TraceId,
 ): Promise<TaskTableRecord[]> {
@@ -346,22 +344,10 @@ export async function getTaskRecords(
     const pageRecords: TaskTableRecord[] = connection.edges.map((edge) => {
       const nodeState = edge.node
 
-      // Create context reference from contextAssetHash
-      const contextRef = new CompoundAssetReference<V12Context>(
-        nodeState.contextAssetHash,
-        null,
-      )
-
-      // Create node reference
-      const nodeRef = new CompoundAssetReference<Node>(
-        nodeState.nodeIdInWorkflow as AssetId,
-        null,
-      )
-
       return {
         workflowRevisionId: nodeState.workflowRevisionId as TraceId,
-        context: contextRef,
-        node: nodeRef,
+        context: nodeState.contextAssetHash as AssetId,
+        node: nodeState.nodeIdInWorkflow as AssetId,
         task: task,
       }
     })
@@ -385,10 +371,10 @@ export async function getTaskRecords(
  * Replaces: createPendingTaskRecord()
  */
 export async function createPendingTaskRecord(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node> | null, // null indicates pipeline output
-  asset: DictLazyAsset,
+  node: AssetId | null, // null indicates pipeline output
+  asset: DictAsset,
   workflowContext: V12WorkflowExecutionContext,
 ): Promise<PendingTaskTableRecord> {
   if (!node) {
@@ -398,25 +384,24 @@ export async function createPendingTaskRecord(
   }
 
   const graphqlClient = getSharedGraphQLClient()
-  const contextRef = await toReference(context)
-  const contextAssetHash = contextRef.id
+  const contextAssetHash = await store(context)
 
   // provide the asset to the merge accumulator via GraphQL
   await graphqlClient.setMergeAccumulator(
-    pipeline.id,
+    pipeline,
     workflowContext.workflowRevisionId,
     contextAssetHash,
-    node.id,
+    node,
     asset,
   )
 
   console.log(
-    `✅ Created pending task record: workflow=${workflowContext.workflowRevisionId}, node=${node.id}`,
+    `✅ Created pending task record: workflow=${workflowContext.workflowRevisionId}, node=${node}`,
   )
 
   return {
     workflowRevisionId: workflowContext.workflowRevisionId,
-    context: contextRef,
+    context: contextAssetHash,
     node,
   }
 }
@@ -426,11 +411,11 @@ export async function createPendingTaskRecord(
  * Replaces: getPendingTask()
  */
 export async function getPendingTaskInputs(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node> | null, // null indicates pipeline output
+  node: AssetId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
-): Promise<DictLazyAsset | null> {
+): Promise<DictAsset | null> {
   if (!node) {
     return null // Pipeline output doesn't have pending tasks
   }
@@ -439,10 +424,10 @@ export async function getPendingTaskInputs(
   const contextAssetHash = await getContextAssetHash(context)
 
   const accumulator = await graphqlClient.getMergeAccumulator(
-    pipeline.id,
+    pipeline,
     workflowContext.workflowRevisionId,
     contextAssetHash,
-    node.id,
+    node,
   )
 
   if (!accumulator) {
@@ -457,9 +442,9 @@ export async function getPendingTaskInputs(
  * Replaces: deletePendingTask()
  */
 export async function deletePendingTask(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node> | null, // null indicates pipeline output
+  node: AssetId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
 ) {
   if (!node) {
@@ -470,14 +455,14 @@ export async function deletePendingTask(
   const contextAssetHash = await getContextAssetHash(context)
 
   await graphqlClient.deleteMergeAccumulator(
-    pipeline.id,
+    pipeline,
     workflowContext.workflowRevisionId,
     contextAssetHash,
-    node.id,
+    node,
   )
 
   console.log(
-    `🗑️  Deleted pending task: workflow=${workflowContext.workflowRevisionId}, node=${node.id}`,
+    `🗑️  Deleted pending task: workflow=${workflowContext.workflowRevisionId}, node=${node}`,
   )
 }
 
@@ -486,13 +471,13 @@ export async function deletePendingTask(
  * Replaces: updateAndRetrieveTaskMergeAsset()
  */
 export async function updateAndRetrieveTaskMergeAsset(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
-  node: CompoundAssetReference<Node> | null, // null indicates pipeline output
+  node: AssetId | null, // null indicates pipeline output
   key: string,
-  item: LazyAsset,
+  item: AssetValue,
   workflowContext: V12WorkflowExecutionContext,
-): Promise<DictLazyAsset> {
+): Promise<DictAsset> {
   if (!node) {
     throw new Error(
       'Cannot update merge asset for pipeline output (node is null)',
@@ -502,23 +487,23 @@ export async function updateAndRetrieveTaskMergeAsset(
   const graphqlClient = getSharedGraphQLClient()
   const contextAssetHash = await getContextAssetHash(context)
 
-  // The merge accumulator stores a dict where each key maps to any LazyAsset value
-  // The item can be a primitive, array, dict, reference, etc.
+  // The merge accumulator stores a dict where each key maps to any AssetValue
+  // The item can be a primitive, array, dict, CID, etc.
   const result = await graphqlClient.mergeMergeAccumulator(
-    pipeline.id,
+    pipeline,
     workflowContext.workflowRevisionId,
     contextAssetHash,
-    node.id,
+    node,
     key,
     item,
   )
 
   if (!result) {
-    throw new Error(`Failed to update merge accumulator for node ${node.id}, key ${key}`)
+    throw new Error(`Failed to update merge accumulator for node ${node}, key ${key}`)
   }
 
   console.log(
-    `🔄 Updated merge accumulator: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, key=${key}`,
+    `🔄 Updated merge accumulator: workflow=${workflowContext.workflowRevisionId}, node=${node}, key=${key}`,
   )
 
   return result
@@ -532,7 +517,7 @@ export async function updateAndRetrieveTaskMergeAsset(
  * Task status is managed by Workers via TaskExecutionStates, not by the scheduler.
  */
 export async function updateTaskStatus(
-  _pipeline: CompoundAssetReference<Pipeline>,
+  _pipeline: AssetId,
   _task: ValueOrRef<Task>,
   eventType: string,
 ) {
@@ -547,15 +532,15 @@ export async function updateTaskStatus(
 
 type TaskTableRecord = {
   workflowRevisionId: TraceId
-  context: CompoundAssetReference<V12Context>
-  node: CompoundAssetReference<Node>
+  context: AssetId
+  node: AssetId
   task: Task
 }
 
 type PendingTaskTableRecord = {
   workflowRevisionId: TraceId
-  context: CompoundAssetReference<V12Context>
-  node: CompoundAssetReference<Node> | null // null indicates pipeline output
+  context: AssetId
+  node: AssetId | null // null indicates pipeline output
 }
 
 // ================================================================
@@ -566,13 +551,13 @@ type PendingTaskTableRecord = {
  * Get workflow execution state for debugging
  */
 export async function debugGetWorkflowState(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
 ): Promise<{
   workflowRevisionId: TraceId
   contextAssetHash: AssetId
-  pendingMergeNodes: Array<{ nodeId: AssetId, accumulator: DictLazyAsset }>
+  pendingMergeNodes: Array<{ nodeId: AssetId, accumulator: DictAsset }>
 }> {
   const contextAssetHash = await getContextAssetHash(context)
 

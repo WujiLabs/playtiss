@@ -15,7 +15,7 @@ const config: CodegenConfig = {
           SystemActionId: "playtiss#SystemActionId",
           TraceId: "playtiss#TraceId",
           Date: "number",
-          DictJSONAsset: "playtiss#DictLazyAsset",
+          DictJSONAsset: "playtiss#DictAsset",
         },
       },
     },

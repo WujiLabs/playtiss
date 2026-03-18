@@ -6,19 +6,13 @@
 import {
   type ActionId,
   type AssetId,
-  BinaryAssetReference,
-  type CompoundAssetId,
-  CompoundAssetReference,
-  type CompoundLazyAsset,
-  type DictLazyAsset,
+  type AssetValue,
+  type DictAsset,
   type EventType,
-  type LazyAsset,
   type SystemActionId,
   type ValueOrRef,
-  isReference,
-  toAssetId,
 } from 'playtiss'
-import { computeHash, load, toReference, toValue } from 'playtiss/asset-store'
+import { computeHash, load, store } from 'playtiss/asset-store'
 import { type Node, type Pipeline, isConstNode } from 'playtiss/pipeline'
 import {
   type NodeSlotInfo,
@@ -77,24 +71,19 @@ const contextValueCache = new LRUCache<string, Promise<V12Context>>({
 })
 
 /**
- * Limiter-aware toValue wrapper for V12Context with caching
+ * Limiter-aware load wrapper for V12Context (AssetId) with caching
  *
  * When onTaskDelivered() processes 20 workflow records in parallel,
  * without this cache/limiter we'd have 20 concurrent uncached S3 load() calls
  *
- * @param contextRef - V12Context as value or reference
+ * @param contextAssetId - V12Context AssetId string
  * @returns The resolved context value
  */
 async function toValueCachedContext(
-  contextRef: ValueOrRef<V12Context>,
+  contextAssetId: AssetId,
 ): Promise<V12Context> {
-  // If already a value, return immediately
-  if (!isReference(contextRef)) {
-    return contextRef
-  }
-
-  // Check cache using ref string as key
-  const cacheKey = contextRef.ref
+  // Check cache using assetId string as key
+  const cacheKey = contextAssetId
   const cachedPromise = contextValueCache.get(cacheKey)
   if (cachedPromise !== undefined) {
     return await cachedPromise
@@ -103,7 +92,7 @@ async function toValueCachedContext(
   // Cache miss - create and cache promise
   const limiter = getLimiter('s3-load')
   const valuePromise = limiter(async () => {
-    return await toValue(contextRef)
+    return (await load(contextAssetId)) as unknown as V12Context
   })
 
   contextValueCache.set(cacheKey, valuePromise)
@@ -134,7 +123,7 @@ async function toValueCachedContext(
  */
 async function createTaskOptimized(
   actionId: ActionId,
-  input: DictLazyAsset,
+  input: DictAsset,
 ): Promise<Task> {
   const client = getSharedGraphQLClient()
   const taskId = await client.createTask(actionId, input)
@@ -152,7 +141,7 @@ async function createTaskOptimized(
 async function writeEventOptimized(
   taskId: TraceId,
   eventType: string,
-  output?: DictLazyAsset,
+  output?: DictAsset,
   workerId?: string,
 ): Promise<{ timestamp: number } | null> {
   const client = getSharedGraphQLClient()
@@ -221,7 +210,7 @@ async function writeEventOptimized(
 }
 
 function isPipelineOutput(
-  node: CompoundAssetReference<Node> | null,
+  node: AssetId | null,
 ): node is null {
   return node === null
 }
@@ -229,7 +218,7 @@ function isPipelineOutput(
 async function writePipelineEvent(
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  asset: DictLazyAsset,
+  asset: DictAsset,
   event_type: EventType,
 ) {
   // write event with the correct worker ID from workflow context
@@ -249,22 +238,21 @@ async function writePipelineEvent(
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function createNodeTask(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  node: CompoundAssetReference<Node>,
-  asset: DictLazyAsset,
+  node: AssetId,
+  asset: DictAsset,
 ): Promise<Task> {
-  const actionId = pipelineInfo.nodes[node.id].action
+  const actionId = pipelineInfo.nodes[node].action
   if (!isTraceId(actionId)) {
     throw new Error(`built in action ${actionId} is not separate task`)
   }
 
-  // Store inputs as compound asset (inputs hash = asset ID)
+  // Store inputs as asset (inputs hash = asset ID)
   const limiter = getLimiter('s3-store')
-  const inputsRef = await limiter(async () => toReference(asset))
-  const inputsAssetId = toAssetId(inputsRef.ref)
+  const inputsAssetId = await limiter(async () => store(asset))
 
   // Apply task-creation limiter here at the leaf operation level
   return await taskCreationPromiseMap(
@@ -289,22 +277,21 @@ async function createNodeTask(
  * Returns Task on first run, null on subsequent revisions
  */
 async function processNodeReady(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  node: CompoundAssetReference<Node>,
-  asset: DictLazyAsset,
+  node: AssetId,
+  asset: DictAsset,
 ): Promise<Task | null> {
-  const actionId = pipelineInfo.nodes[node.id].action
+  const actionId = pipelineInfo.nodes[node].action
   if (!isTraceId(actionId)) {
     throw new Error(`built in action ${actionId} is not separate task`)
   }
 
-  // Store inputs as compound asset (inputs hash = asset ID)
+  // Store inputs as asset (inputs hash = asset ID)
   const limiter = getLimiter('s3-store')
-  const inputsRef = await limiter(async () => toReference(asset))
-  const inputsAssetId = toAssetId(inputsRef.ref)
+  const inputsAssetId = await limiter(async () => store(asset))
 
   const contextAssetHash = await getContextAssetHash(context)
   const graphqlClient = getSharedGraphQLClient()
@@ -312,11 +299,11 @@ async function processNodeReady(
   // Check if node already exists
   const existingNodeState = await graphqlClient.getNodeState(
     workflowContext.workflowRevisionId,
-    node.id,
+    node,
     contextAssetHash,
   )
 
-  console.log(`🔍 DEBUG processNodeReady: node=${node.id}, workflowRevisionId=${workflowContext.workflowRevisionId}`)
+  console.log(`🔍 DEBUG processNodeReady: node=${node}, workflowRevisionId=${workflowContext.workflowRevisionId}`)
   console.log(`🔍 DEBUG existingNodeState:`, existingNodeState
     ? {
         requiredTaskId: existingNodeState.requiredTaskId,
@@ -329,7 +316,7 @@ async function processNodeReady(
 
   // Case 1: Node doesn't exist → First run, create task immediately
   if (!existingNodeState || !existingNodeState.requiredTaskId) {
-    console.log(`🆕 First run detected for node ${node.id}, creating task immediately`)
+    console.log(`🆕 First run detected for node ${node}, creating task immediately`)
 
     return await taskCreationPromiseMap(
       [null], // dummy item to satisfy promise_map_limited
@@ -344,16 +331,16 @@ async function processNodeReady(
 
   // Case 2: Node exists with same inputs → Skip (idempotent)
   if (existingNodeState.lastInputsHash === inputsAssetId) {
-    console.log(`✅ Node ${node.id} inputs unchanged, skipping`)
+    console.log(`✅ Node ${node} inputs unchanged, skipping`)
     return null
   }
 
   // Case 3: Node exists with different inputs → Recreation
-  console.log(`🔄 Recreation detected for node ${node.id} (inputs changed)`)
+  console.log(`🔄 Recreation detected for node ${node} (inputs changed)`)
 
   if (AUTO_PROPAGATE_STALE_NODES) {
     // THROUGHPUT MODE: Auto-create task and schedule immediately
-    console.log(`⚡ Auto-propagate ENABLED: creating task for stale node ${node.id}`)
+    console.log(`⚡ Auto-propagate ENABLED: creating task for stale node ${node}`)
 
     return await taskCreationPromiseMap(
       [null],
@@ -368,7 +355,7 @@ async function processNodeReady(
         // - Set lastInputsHash = inputsAssetId
         await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH')
 
-        console.log(`✅ Auto-created task ${task.id} for stale node ${node.id}`)
+        console.log(`✅ Auto-created task ${task.id} for stale node ${node}`)
         return task
       },
       { concurrency: 1 },
@@ -376,12 +363,12 @@ async function processNodeReady(
   }
   else {
     // INTERACTIVE MODE (Default): Mark STALE/IDLE, wait for user
-    console.log(`⏸️  Auto-propagate DISABLED: marking node ${node.id} as STALE/IDLE`)
+    console.log(`⏸️  Auto-propagate DISABLED: marking node ${node} as STALE/IDLE`)
 
     const success = await graphqlClient.updateNodeStates(
       workflowContext.workflowRevisionId,
       [{
-        nodeId: node.id,
+        nodeId: node,
         dependencyStatus: 'STALE' as const,
         runtimeStatus: 'IDLE' as const,
         contextAssetHash: contextAssetHash,
@@ -391,10 +378,10 @@ async function processNodeReady(
     )
 
     if (!success) {
-      throw new Error(`Failed to mark node ${node.id} as STALE for recreation`)
+      throw new Error(`Failed to mark node ${node} as STALE for recreation`)
     }
 
-    console.log(`✅ Marked node as STALE/IDLE: workflow=${workflowContext.workflowRevisionId}, node=${node.id}, inputsHash=${inputsAssetId}`)
+    console.log(`✅ Marked node as STALE/IDLE: workflow=${workflowContext.workflowRevisionId}, node=${node}, inputsHash=${inputsAssetId}`)
     return null // Task creation waits for user permission (requestStaleNodesUpdate)
   }
 }
@@ -407,32 +394,26 @@ function isTagSlot(name: string): name is `%${string}` {
 const taskMergeAction: SystemActionId = 'core:orchestrator.task_merge'
 
 async function accessDictAsset(
-  asset: DictLazyAsset,
+  asset: DictAsset,
   key: string,
-): Promise<LazyAsset> {
+): Promise<AssetValue> {
   const keys = key.split('.')
   if (keys.length === 0) {
     throw new Error('not valid key string')
   }
-  let retAsset: LazyAsset = asset
+  let retAsset: AssetValue = asset
   for (const k of keys) {
     if (
       retAsset !== null
       && typeof retAsset === 'object'
-      && !isReference(retAsset)
-      && !(retAsset instanceof ArrayBuffer)
+      && !(retAsset instanceof Uint8Array)
       && !Array.isArray(retAsset)
     ) {
-      const v: LazyAsset = (retAsset as DictLazyAsset)[k]
-      if (isReference(v) && v instanceof CompoundAssetReference) {
-        retAsset = await load(v.ref)
-      }
-      else {
-        retAsset = v
-      }
+      const v: AssetValue = (retAsset as DictAsset)[k]
+      retAsset = v
     }
     else {
-      throw new Error('not valid DictLazyAsset')
+      throw new Error('not valid DictAsset')
     }
   }
   return retAsset
@@ -452,7 +433,7 @@ async function accessDictAsset(
  *
  * Structure: Map<workflowRevisionId, Map<nextNodeId, Promise>>
  * - First level key: workflowRevisionId (TraceId) - different revisions don't block each other
- * - Second level key: nextNodeId (CompoundAssetId) - identifies the merge node
+ * - Second level key: nextNodeId (AssetId) - identifies the merge node
  * - Value: Promise that resolves when the critical zone completes
  *
  * TODO: Consider cleanup of completed workflow revisions to prevent unbounded memory growth.
@@ -460,15 +441,15 @@ async function accessDictAsset(
  */
 const criticalZoneLock = new Map<
   TraceId,
-  Map<CompoundAssetId, Promise<void>>
+  Map<AssetId, Promise<void>>
 >()
 
 async function processNodeSlotInfo(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  currentAsset: DictLazyAsset,
+  currentAsset: DictAsset,
   { node: nextNodeId, tag_edges, slot_edges }: NodeSlotInfo,
 ): Promise<Task | PendingTask | (Task | PendingTask)[] | null> {
   // Create a promise to signal when this call's critical zone completes
@@ -482,7 +463,7 @@ async function processNodeSlotInfo(
     const nextNode
       = nextNodeId === null
         ? null
-        : new CompoundAssetReference<Node>(toAssetId(nextNodeId), null)
+        : nextNodeId as AssetId
     const nextNodeType
       = nextNodeId === null
         ? pipelineInfo.output_type
@@ -515,7 +496,7 @@ async function processNodeSlotInfo(
     )
 
     // prepare nextAsset
-    let nextAsset: DictLazyAsset = {}
+    let nextAsset: DictAsset = {}
     if (nextNodeType === 'merge') {
       // === CRITICAL ZONE FOR MERGE NODES ===
       // Acquire lock to prevent concurrent access to merge node state within same workflow revision
@@ -525,7 +506,7 @@ async function processNodeSlotInfo(
       // 1. Get or create the lock map for this workflow revision
       let revisionLocks = criticalZoneLock.get(revisionId)
       if (!revisionLocks) {
-        revisionLocks = new Map<CompoundAssetId, Promise<void>>()
+        revisionLocks = new Map<AssetId, Promise<void>>()
         criticalZoneLock.set(revisionId, revisionLocks)
       }
 
@@ -638,7 +619,7 @@ async function processNodeSlotInfo(
         else {
           const action = isPipelineOutput(nextNode)
             ? (workflowContext.workflowRevisionId as ActionId) // TODO: FIX THIS
-            : pipelineInfo.nodes[nextNode.id].action
+            : pipelineInfo.nodes[nextNode!].action
           if (!isTraceId(action)) {
             throw new Error(
               `built in action ${action} does not accept inputs from multiple nodes`,
@@ -764,17 +745,17 @@ async function processNodeSlotInfo(
           throw new Error('Output node cannot be a const node')
         }
         // Get the const value from the node definition
-        const nodeData = pipelineInfo.nodes[nextNode.id]
+        const nodeData = pipelineInfo.nodes[nextNode!]
         if (!isConstNode(nodeData)) {
-          throw new Error(`Node ${nextNode.id} is marked as const but missing value property`)
+          throw new Error(`Node ${nextNode} is marked as const but missing value property`)
         }
         // Single 'output' slot - downstream accesses via 'output' or 'output.key'
-        const constOutput: DictLazyAsset = { output: nodeData.value }
+        const constOutput: DictAsset = { output: nodeData.value }
 
         // Propagate const value to downstream nodes
         return flattenTasks(
           await promise_map(
-            pipelineInfo.node_nexts[nextNode.ref],
+            pipelineInfo.node_nexts[nextNode!],
             async nodeSlotInfo =>
               processNodeSlotInfo(
                 pipeline,
@@ -823,14 +804,14 @@ function flattenTasks(
 }
 
 async function splitTask(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  currentAsset: DictLazyAsset,
-  node: CompoundAssetReference<Node>,
+  currentAsset: DictAsset,
+  node: AssetId,
 ): Promise<(Task | PendingTask)[]> {
-  const input: CompoundLazyAsset = await ensureCompoundLazyAsset(
+  const input = await ensureDictOrArrayAsset(
     currentAsset['input'],
   )
 
@@ -843,7 +824,7 @@ async function splitTask(
         async (item, key) => {
           return flattenTasks(
             await promise_map(
-              pipelineInfo.node_nexts[node.ref],
+              pipelineInfo.node_nexts[node],
               async nodeSlotInfo =>
                 processNodeSlotInfo(
                   pipeline,
@@ -872,7 +853,7 @@ async function splitTask(
         async ([key, item], entryIndex) => {
           try {
             const nodeResults = await promise_map(
-              pipelineInfo.node_nexts[node.ref],
+              pipelineInfo.node_nexts[node],
               async (nodeSlotInfo, index) => {
                 try {
                   return await processNodeSlotInfo(
@@ -919,16 +900,16 @@ async function splitTask(
 }
 
 async function deliverMergeTask(
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  currentAsset: DictLazyAsset,
-  node: CompoundAssetReference<Node>,
+  currentAsset: DictAsset,
+  node: AssetId,
 ): Promise<(Task | PendingTask)[]> {
   return flattenTasks(
     await promise_map(
-      pipelineInfo.node_nexts[node.ref],
+      pipelineInfo.node_nexts[node],
       async nodeSlotInfo =>
         processNodeSlotInfo(
           pipeline,
@@ -951,7 +932,7 @@ export async function onPipelineClaimed(
     task: Task
     workflowRevisionId: TraceId
   },
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
 ): Promise<(Task | PendingTask)[]> {
@@ -964,8 +945,8 @@ export async function onPipelineClaimed(
   // get input
   const { inputsContentHash } = claimEvent.task
   const input = (await load(
-    `@${inputsContentHash as AssetId}`,
-  )) as DictLazyAsset
+    inputsContentHash as AssetId,
+  )) as DictAsset
   console.log(`📋 Loaded workflow input:`, JSON.stringify(input, null, 2))
 
   // compute/fetch pipeline info
@@ -1003,13 +984,13 @@ export async function onPipelineClaimed(
   // Const nodes need to be initialized here since they have no upstream connections
   const constNodeRefs = Object.entries(pipelineInfo.node_types)
     .filter(([, nodeType]) => nodeType === 'const')
-    .map(([nodeRef]) => nodeRef as `@${AssetId}`)
+    .map(([nodeRef]) => nodeRef as AssetId)
 
   if (constNodeRefs.length > 0) {
     console.log(`📋 Processing ${constNodeRefs.length} const nodes:`, constNodeRefs)
 
     for (const constNodeRef of constNodeRefs) {
-      const nodeId = toAssetId(constNodeRef)
+      const nodeId = constNodeRef
       const nodeData = pipelineInfo.nodes[nodeId]
 
       if (!isConstNode(nodeData)) {
@@ -1018,7 +999,7 @@ export async function onPipelineClaimed(
       }
 
       // Create const node output (single 'output' slot)
-      const constOutput: DictLazyAsset = { output: nodeData.value }
+      const constOutput: DictAsset = { output: nodeData.value }
 
       // Get downstream nodes for this const node
       const nextNodes = pipelineInfo.node_nexts[constNodeRef] || []
@@ -1052,52 +1033,46 @@ export async function onPipelineClaimed(
   return allResults
 }
 
-async function ensureCompoundLazyAsset(
-  asset: LazyAsset,
-): Promise<CompoundLazyAsset> {
+type DictOrArrayAsset = DictAsset | AssetValue[]
+
+async function ensureDictOrArrayAsset(
+  asset: AssetValue,
+): Promise<DictOrArrayAsset> {
   if (asset === null) {
     throw new Error('asset is null')
   }
-  if (isReference(asset)) {
-    if (asset instanceof BinaryAssetReference) {
-      throw new Error('asset is BinaryAssetReference')
-    }
-    asset = await toValue(asset as CompoundAssetReference<DictLazyAsset>)
-  }
   if (
-    asset === null
-    || typeof asset === 'boolean'
+    typeof asset === 'boolean'
     || typeof asset === 'number'
     || typeof asset === 'string'
   ) {
     throw new Error(`asset is primitive value: ${String(asset)}`)
   }
-  if (asset instanceof ArrayBuffer) {
-    throw new Error('asset is ArrayBuffer')
+  if (asset instanceof Uint8Array) {
+    throw new Error('asset is Uint8Array')
   }
-  return asset as CompoundLazyAsset
+  return asset as DictOrArrayAsset
 }
 
-async function ensureDictLazyAsset(asset: LazyAsset): Promise<DictLazyAsset> {
-  asset = await ensureCompoundLazyAsset(asset)
+async function ensureDictAsset(asset: AssetValue): Promise<DictAsset> {
+  asset = await ensureDictOrArrayAsset(asset)
   if (Array.isArray(asset)) {
-    throw new Error('asset is LazyAsset[]')
+    throw new Error('asset is array')
   }
-  return asset as DictLazyAsset
+  return asset as DictAsset
 }
 
 // on task delivered
 export async function onTaskDelivered(
   deliverEvent: {
     task: Task
-    output: LazyAsset
+    output: AssetValue
   },
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
   workflowRevisionId: TraceId, // current workflow revision ID for this orchestrator
 ): Promise<(Task | PendingTask)[]> {
-  const pipelineRef = await toReference(pipeline)
   const { task, output: asset } = deliverEvent
 
   // TODO: remove task from watch list
@@ -1106,7 +1081,7 @@ export async function onTaskDelivered(
   // compute/fetch pipeline info
   const pipelineInfo: PipelineInfo = await parsePipeline(pipeline)
   // find all context and node for this workflow revision ID (filtered server-side)
-  const records = await getTaskRecords(pipelineRef, task, workflowRevisionId)
+  const records = await getTaskRecords(pipeline, task, workflowRevisionId)
   if (records.length === 0) {
     console.warn(`❌ No records found for workflow revision ${workflowRevisionId}`)
     return []
@@ -1126,8 +1101,8 @@ export async function onTaskDelivered(
       // Get the actual node state to check if it was already delivered
       const nodeState = await graphqlClient.getWorkflowRevisionNodeState(
         workflowRevisionId,
-        toAssetId(record.node.ref),
-        toAssetId(record.context.ref),
+        record.node,
+        record.context,
       )
 
       if (nodeState?.lastUsedVersion?.asset_content_hash) {
@@ -1136,14 +1111,14 @@ export async function onTaskDelivered(
 
         if (newOutputHash !== oldOutputHash) {
           // Redelivery detected! Fork revision to preserve history
-          console.log(`🔀 Redelivery detected for node ${record.node.ref}: ${oldOutputHash} → ${newOutputHash}`)
+          console.log(`🔀 Redelivery detected for node ${record.node}: ${oldOutputHash} → ${newOutputHash}`)
 
           const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
           if (workflowTaskId) {
             newRevisionId = await graphqlClient.forkWorkflowRevision(
               workflowTaskId,
               workflowRevisionId,
-              `Redelivery of task ${task.id} in node ${record.node.ref}`,
+              `Redelivery of task ${task.id} in node ${record.node}`,
             )
 
             // Update workflowRevisionId to point to the new revision for subsequent operations
@@ -1192,23 +1167,23 @@ export async function onTaskDelivered(
         }
 
         // find corresponding next nodes
-        if (!(node.ref in pipelineInfo.node_nexts)) {
-          console.log(`⚠️  Node ${node.ref} has no next nodes in pipeline`)
+        if (!(node in pipelineInfo.node_nexts)) {
+          console.log(`⚠️  Node ${node} has no next nodes in pipeline`)
           return []
         }
 
-        const nextNodes = pipelineInfo.node_nexts[node.ref]
+        const nextNodes = pipelineInfo.node_nexts[node]
 
         const results = flattenTasks(
           await promise_map(
             nextNodes,
             async nodeSlotInfo =>
               processNodeSlotInfo(
-                pipelineRef,
+                pipeline,
                 pipelineInfo,
                 currentContext,
                 workflowContext,
-                await ensureDictLazyAsset(asset),
+                await ensureDictAsset(asset),
                 nodeSlotInfo,
               ),
             { concurrency },
@@ -1234,19 +1209,18 @@ export async function onTaskAborted(
     output,
   }: {
     task: Task
-    output: LazyAsset
+    output: AssetValue
   },
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
   workflowRevisionId: TraceId, // current workflow revision ID for this orchestrator
 ) {
-  const pipelineRef = await toReference(pipeline)
-  const asset = output !== null ? await ensureDictLazyAsset(output) : null
+  const asset = output !== null ? await ensureDictAsset(output) : null
 
   // Log the output asset to debug cache issues
   if (asset && asset.orders) {
-    const orderKeys = Object.keys(asset.orders)
+    const orderKeys = Object.keys(asset.orders as Record<string, unknown>)
     console.log(
       `📦 onTaskDelivered received asset with ${orderKeys.length} orders: [${orderKeys.slice(0, 5).join(', ')}${orderKeys.length > 5 ? ', ...' : ''}]`,
     )
@@ -1257,7 +1231,7 @@ export async function onTaskAborted(
 
   // find all context and abort (filtered server-side)
   // TODO: abort other internal subtasks as well?
-  const records = await getTaskRecords(pipelineRef, task, workflowRevisionId)
+  const records = await getTaskRecords(pipeline, task, workflowRevisionId)
   if (records.length === 0) {
     console.warn(`❌ No records found for workflow revision ${workflowRevisionId}`)
     return
@@ -1265,7 +1239,7 @@ export async function onTaskAborted(
   await promise_map(
     records,
     async ({ context, node, workflowRevisionId }) => {
-      const currentContext = await toValue(context)
+      const currentContext = await toValueCachedContext(context)
 
       // Find the workflow task ID from the workflow revision ID
       const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
@@ -1300,21 +1274,20 @@ export async function onTaskAborted(
 export async function onTaskUpdated(
   updateEvent: {
     task: Task
-    output: LazyAsset
+    output: AssetValue
   },
-  pipeline: CompoundAssetReference<Pipeline>,
+  pipeline: AssetId,
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
   workflowRevisionId: TraceId, // current workflow revision ID for this orchestrator
 ) {
-  const pipelineRef = await toReference(pipeline)
   const { task, output } = updateEvent
-  const asset = output !== null ? await ensureDictLazyAsset(output) : null
+  const asset = output !== null ? await ensureDictAsset(output) : null
   // update internal status
   await updateTaskStatus(pipeline, task, 'update')
 
   // find all context and update (filtered server-side)
-  const records = await getTaskRecords(pipelineRef, task, workflowRevisionId)
+  const records = await getTaskRecords(pipeline, task, workflowRevisionId)
   if (records.length === 0) {
     console.warn(`❌ No records found for workflow revision ${workflowRevisionId}`)
     return
@@ -1323,7 +1296,7 @@ export async function onTaskUpdated(
   await promise_map(
     records,
     async ({ context, node, workflowRevisionId }) => {
-      const currentContext = await toValue(context)
+      const currentContext = await toValueCachedContext(context)
 
       // Find the workflow task ID from the workflow revision ID
       const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)

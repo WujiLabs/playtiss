@@ -16,7 +16,7 @@ We are migrating to a permissive open-source license (MIT/Apache 2.0) as the cod
 
 Playtiss uses a decoupled Engine/Worker architecture with:
 
-- **Content-Addressable Storage (CAS)** - Immutable assets identified by SHA-256 hashes
+- **Content-Addressable Storage (CAS)** - Immutable assets identified by IPLD CIDs (Content Identifiers)
 - **TraceID System** - UUID v8-based temporal tracking for all entities
 - **Version-Based Data Model** - Immutable versions with typed outputs (OUTPUT, ERROR, REVISION, etc.)
 - **Event-Driven Orchestration** - SQLite-based event bus for workflow coordination

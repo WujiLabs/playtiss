@@ -6,11 +6,11 @@
 import type { GetRevisionQuery, GetTaskExecutionStateQuery, GetTaskQuery } from '../__generated__/graphql.js'
 
 // TODO: remove this once we migrate to v12
-import type { ActionId, DictLazyAsset } from 'playtiss'
+import type { ActionId, DictAsset } from 'playtiss'
 export type PendingTask = {
   asset_type: 'pending_task'
   action: ActionId
-  input: DictLazyAsset
+  input: DictAsset
   creator: string
   timestamp: number
 }

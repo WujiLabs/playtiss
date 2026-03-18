@@ -3,13 +3,13 @@
 // Original source / algorithm or asset licensed from:
 // Pinscreen, Inc.
 // https://www.pinscreen.com/
-import { toValue } from '../asset-store/index.js'
-import { CompoundAssetReference, toAssetId, type AssetId } from '../index.js'
+import { load } from '../asset-store/index.js'
+import { type AssetId } from '../index.js'
 import { isTraceId } from '../types/trace_id.js'
 import { type Edge, type Node, type Pipeline } from './index.js'
 
 export interface NodeSlotInfo {
-  node: `@${AssetId}` | null // null indicates pipeline output
+  node: AssetId | null // null indicates pipeline output
   tag_edges: Edge[] // target is tag slot
   slot_edges: Edge[] // target is regular slot
 }
@@ -19,9 +19,9 @@ type NodeType = 'regular' | 'merge' | 'task_split' | 'task_merge' | 'const'
 export interface PipelineInfo {
   nodes: Record<AssetId, Node>
   input_next: NodeSlotInfo[]
-  node_nexts: Record<`@${AssetId}`, NodeSlotInfo[]>
-  node_slots: Record<`@${AssetId}`, string[]>
-  node_types: Record<`@${AssetId}`, NodeType>
+  node_nexts: Record<AssetId, NodeSlotInfo[]>
+  node_slots: Record<AssetId, string[]>
+  node_types: Record<AssetId, NodeType>
   output_type: NodeType
   output_slots: string[]
 }
@@ -45,12 +45,12 @@ function mergeSlots(all_slots: NodeSlotInfo[]): NodeSlotInfo[] {
 const pipelineInfoCache = new Map<AssetId, PipelineInfo>()
 
 export async function parsePipeline(
-  pipelineRef: CompoundAssetReference<Pipeline>,
+  pipelineId: AssetId,
 ): Promise<PipelineInfo> {
-  if (pipelineInfoCache.has(pipelineRef.id)) {
-    return pipelineInfoCache.get(pipelineRef.id)!
+  if (pipelineInfoCache.has(pipelineId)) {
+    return pipelineInfoCache.get(pipelineId)!
   }
-  const pipeline = await toValue(pipelineRef)
+  const pipeline = await load(pipelineId) as unknown as Pipeline
   const info: PipelineInfo = {
     nodes: pipeline.nodes,
     input_next: [],
@@ -60,25 +60,25 @@ export async function parsePipeline(
     output_type: 'regular',
     output_slots: [],
   }
-  const slots_set: Record<`@${AssetId}` | 'output', Set<string>> = {
+  const slots_set: Record<AssetId | 'output', Set<string>> = {
     output: new Set<string>(),
   }
   // record the source of each target, or 'multiple' if there are more than 1
   // if there are more than 1 source, the node is a merge node
   // otherwise it is a regular node
   // TODO: handle dynamic merge and dynamic action
-  const node_input_id: Record<string, `@${AssetId}` | null | 'multiple'> = {}
+  const node_input_id: Record<string, AssetId | null | 'multiple'> = {}
 
   // Pre-initialize const node types (they are source nodes with no incoming edges)
   for (const [nodeId, node] of Object.entries(pipeline.nodes)) {
     if (node.action === 'const') {
-      info.node_types[`@${nodeId}` as `@${AssetId}`] = 'const'
+      info.node_types[nodeId as AssetId] = 'const'
     }
   }
   Object.values(pipeline.edges).map((edge) => {
     const { source, target } = edge
-    const source_node_id = source.node?.ref || null
-    const target_node_id = target.node?.ref || null
+    const source_node_id = source.node || null
+    const target_node_id = target.node || null
     // check if there are multiple sources connecting to target
     if (target_node_id === null) {
       // collect output slots
@@ -108,7 +108,7 @@ export async function parsePipeline(
       if (!(target_node_id in info.node_types)) {
         info.node_types[target_node_id] = 'regular'
         // set dynamic_split / dynamic_merge
-        const action = pipeline.nodes[toAssetId(target_node_id)].action
+        const action = pipeline.nodes[target_node_id].action
         if (!isTraceId(action)) {
           if (action === 'merge') {
             info.node_types[target_node_id] = 'task_merge'
@@ -159,16 +159,16 @@ export async function parsePipeline(
       }
     }
     else {
-      if (source.node.ref in info.node_nexts) {
+      if (source.node in info.node_nexts) {
         if (target.name.startsWith('%')) {
-          info.node_nexts[source.node.ref].push({
+          info.node_nexts[source.node].push({
             node: target_node_id,
             tag_edges: [edge],
             slot_edges: [],
           })
         }
         else {
-          info.node_nexts[source.node.ref].push({
+          info.node_nexts[source.node].push({
             node: target_node_id,
             tag_edges: [],
             slot_edges: [edge],
@@ -177,12 +177,12 @@ export async function parsePipeline(
       }
       else {
         if (target.name.startsWith('%')) {
-          info.node_nexts[source.node.ref] = [
+          info.node_nexts[source.node] = [
             { node: target_node_id, tag_edges: [edge], slot_edges: [] },
           ]
         }
         else {
-          info.node_nexts[source.node.ref] = [
+          info.node_nexts[source.node] = [
             { node: target_node_id, tag_edges: [], slot_edges: [edge] },
           ]
         }
@@ -196,8 +196,8 @@ export async function parsePipeline(
       info.output_slots = Array.from(slots_set[node_id].keys())
     }
     else {
-      info.node_slots[node_id as `@${AssetId}`] = Array.from(
-        slots_set[node_id as `@${AssetId}`].keys(),
+      info.node_slots[node_id as AssetId] = Array.from(
+        slots_set[node_id as AssetId].keys(),
       )
     }
   }
@@ -205,12 +205,12 @@ export async function parsePipeline(
   // merge slots of same target
   info.input_next = mergeSlots(info.input_next)
   for (const node_id in info.node_nexts) {
-    info.node_nexts[node_id as `@${AssetId}`] = mergeSlots(
-      info.node_nexts[node_id as `@${AssetId}`],
+    info.node_nexts[node_id as AssetId] = mergeSlots(
+      info.node_nexts[node_id as AssetId],
     )
   }
 
   // save to cache and return
-  pipelineInfoCache.set(pipelineRef.id, info)
+  pipelineInfoCache.set(pipelineId, info)
   return info
 }

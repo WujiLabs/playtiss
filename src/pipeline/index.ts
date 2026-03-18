@@ -5,9 +5,8 @@
 // https://www.pinscreen.com/
 import {
   type AssetId,
-  CompoundAssetReference,
-  type DictLazyAsset,
-  type LazyAsset,
+  type AssetValue,
+  type DictAsset,
 } from '../index.js'
 import type { Action } from '../types/legacy.js'
 import type { UserActionId } from '../types/playtiss.js'
@@ -25,11 +24,11 @@ type PipelineOutputSlot = {
 }
 
 type NodeInputSlot = {
-  node: CompoundAssetReference<Node>
+  node: AssetId
   name: string
 }
 type NodeOutputSlot = {
-  node: CompoundAssetReference<Node>
+  node: AssetId
   name: string
 }
 
@@ -39,7 +38,7 @@ export type EdgeTargetSlot = NodeInputSlot | PipelineOutputSlot
 export type BuiltinAction = 'split' | 'merge' | 'const'
 
 // Base Node interface - used for regular action and builtin split/merge nodes
-export interface Node extends DictLazyAsset {
+export interface Node extends DictAsset {
   asset_type: 'pipeline_node'
   action: UserActionId | BuiltinAction // | EdgeSourceSlot; // output of an action as a dynamic action
   use_task_creator: boolean // false: use pipeline worker as creator; true: use task creator
@@ -50,7 +49,7 @@ export interface Node extends DictLazyAsset {
 export interface ConstNode extends Node {
   action: 'const'
   use_task_creator: false
-  value: LazyAsset // The constant value to output
+  value: AssetValue // The constant value to output
 }
 
 // Type guard to check if a node is a const node
@@ -58,7 +57,7 @@ export function isConstNode(node: Node): node is ConstNode {
   return node.action === 'const' && 'value' in node
 }
 
-export interface Edge extends DictLazyAsset {
+export interface Edge extends DictAsset {
   asset_type: 'pipeline_edge'
   source: EdgeSourceSlot
   target: EdgeTargetSlot

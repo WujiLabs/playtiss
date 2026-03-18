@@ -24,13 +24,12 @@ import { LRUCache } from 'lru-cache'
 import {
   type ActionId,
   type AssetId,
-  type DictLazyAsset,
-  type LazyAsset,
+  type AssetValue,
+  type DictAsset,
   type TraceId,
-  toAssetId,
 } from 'playtiss'
 import { computeHash, store } from 'playtiss/asset-store'
-import { jsonify, parseAssetText } from 'playtiss/types/json'
+import { encodeToString, decodeFromString } from 'playtiss/types/json'
 import { graphql } from '../__generated__/index.js'
 import { getLimiter } from '../utils/concurrency-limiter.js'
 import type { Task } from './types.js'
@@ -719,7 +718,7 @@ export class PipelineGraphQLClient {
    * Avoids redundant S3 calls for identical inputs
    * Limits concurrency of store() operations to prevent S3 socket saturation
    */
-  private async getInputAssetHash(input: DictLazyAsset): Promise<AssetId> {
+  private async getInputAssetHash(input: DictAsset): Promise<AssetId> {
     // Use computeHash() to create stable cache key (fixed-length hash, no S3 calls)
     const cacheKey = await computeHash(input)
 
@@ -731,8 +730,7 @@ export class PipelineGraphQLClient {
     // Cache miss - compute and store with concurrency limiting
     const s3StoreLimiter = getLimiter('s3-store')
     const uniquenessHash = await s3StoreLimiter(async () => {
-      const uniquenessCompoundId = await store(input)
-      return toAssetId(uniquenessCompoundId)
+      return await store(input)
     })
 
     this.inputHashCache.set(cacheKey, uniquenessHash)
@@ -751,7 +749,7 @@ export class PipelineGraphQLClient {
    */
   async createTask(
     actionId: ActionId,
-    input: DictLazyAsset,
+    input: DictAsset,
   ): Promise<TraceId> {
     // Step 1: Compute uniqueness hash with caching
     // Context is only recorded in WorkflowRevisionNodeStates, not part of uniqueness
@@ -1043,14 +1041,13 @@ export class PipelineGraphQLClient {
    */
   async reportTaskSuccessWithOutput(
     taskId: TraceId,
-    output: DictLazyAsset,
+    output: DictAsset,
     workerId: string,
     commitMessage?: string,
   ): Promise<boolean> {
     try {
       // Step 1: Store output and create OUTPUT version
-      const outputCompoundId = await store(output)
-      const outputAssetHash = toAssetId(outputCompoundId)
+      const outputAssetHash = await store(output)
 
       const versionId = await this.createVersion(
         taskId,
@@ -1108,14 +1105,13 @@ export class PipelineGraphQLClient {
    */
   async reportTaskFailureWithError(
     taskId: TraceId,
-    error: DictLazyAsset,
+    error: DictAsset,
     workerId: string,
     commitMessage?: string,
   ): Promise<boolean> {
     try {
       // Step 1: Store error and create ERROR version
-      const errorCompoundId = await store(error)
-      const errorAssetHash = toAssetId(errorCompoundId)
+      const errorAssetHash = await store(error)
 
       const versionId = await this.createVersion(
         taskId,
@@ -1609,23 +1605,18 @@ export class PipelineGraphQLClient {
    * Set/overwrite merge accumulator state atomically
    * Used when merge node receives all inputs and becomes ready
    *
-   * @param accumulatorData - DictLazyAsset that may contain CompoundAssetReferences
+   * @param accumulatorData - DictAsset that may contain CompoundAssetReferences
    */
   async setMergeAccumulator(
     pipelineId: AssetId,
     workflowRevisionId: TraceId,
     contextAssetHash: AssetId,
     nodeId: string,
-    accumulatorData: DictLazyAsset,
+    accumulatorData: DictAsset,
   ): Promise<boolean> {
     try {
-      // Convert DictLazyAsset to JSONAsset for GraphQL transport
-      const jsonData = jsonify(accumulatorData)
-
-      // jsonify can return null for non-serializable values, but accumulator should always be a dict
-      if (jsonData === null || typeof jsonData !== 'object' || Array.isArray(jsonData)) {
-        throw new Error('Invalid accumulator data: must be a dictionary object')
-      }
+      // Convert DictAsset to encoded string for GraphQL transport
+      const jsonData = encodeToString(accumulatorData)
 
       const response = await this.client.mutate({
         mutation: SET_MERGE_ACCUMULATOR,
@@ -1648,12 +1639,12 @@ export class PipelineGraphQLClient {
 
   /**
    * Atomically merge update: read current state, update one key, write back
-   * Returns the updated accumulator state as DictLazyAsset
+   * Returns the updated accumulator state as DictAsset
    * Used when merge node receives partial input
    *
    * @param key - The key to update in the accumulator
-   * @param value - Any LazyAsset value (primitive, array, dict, reference, etc.)
-   * @returns DictLazyAsset - The complete updated accumulator state
+   * @param value - Any AssetValue value (primitive, array, dict, CID, etc.)
+   * @returns DictAsset - The complete updated accumulator state
    */
   async mergeMergeAccumulator(
     pipelineId: AssetId,
@@ -1661,11 +1652,11 @@ export class PipelineGraphQLClient {
     contextAssetHash: AssetId,
     nodeId: string,
     key: string,
-    value: LazyAsset,
-  ): Promise<DictLazyAsset | null> {
+    value: AssetValue,
+  ): Promise<DictAsset | null> {
     try {
-      // Convert LazyAsset to JSONAsset for GraphQL transport
-      const jsonValue = jsonify(value)
+      // Convert AssetValue to JSONAsset for GraphQL transport
+      const jsonValue = encodeToString(value)
 
       // Note: jsonValue can be any JSON type (null, boolean, number, string, array, object)
       // since it's the value for a specific key in the accumulator dict
@@ -1687,9 +1678,9 @@ export class PipelineGraphQLClient {
         return null
       }
 
-      // Convert JSONAsset back to DictLazyAsset
+      // Convert encoded string back to DictAsset
       // The result is always a dict (the full accumulator state)
-      return parseAssetText(JSON.stringify(result)) as DictLazyAsset
+      return decodeFromString(JSON.stringify(result)) as DictAsset
     }
     catch (error) {
       console.error('Error merging merge accumulator:', error)
@@ -1727,14 +1718,14 @@ export class PipelineGraphQLClient {
 
   /**
    * Get current merge accumulator state (for debugging)
-   * Returns DictLazyAsset with reconstructed CompoundAssetReferences
+   * Returns DictAsset with reconstructed CompoundAssetReferences
    */
   async getMergeAccumulator(
     pipelineId: AssetId,
     workflowRevisionId: TraceId,
     contextAssetHash: AssetId,
     nodeId: string,
-  ): Promise<DictLazyAsset | null> {
+  ): Promise<DictAsset | null> {
     try {
       const response = await this.client.query({
         query: GET_MERGE_ACCUMULATOR,
@@ -1752,8 +1743,8 @@ export class PipelineGraphQLClient {
         return null
       }
 
-      // Convert JSONAsset back to DictLazyAsset
-      return parseAssetText(JSON.stringify(result)) as DictLazyAsset
+      // Convert encoded string back to DictAsset
+      return decodeFromString(JSON.stringify(result)) as DictAsset
     }
     catch (error) {
       console.error('Error getting merge accumulator:', error)

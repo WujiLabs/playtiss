@@ -1,12 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 import type { ASTNode } from 'graphql'
 import { GraphQLError, GraphQLScalarType, Kind } from 'graphql'
-
-const SHA256_REGEX = /^[a-f0-9]{64}$/i
+import { CID } from 'multiformats/cid'
 
 const validate = (value: unknown, ast?: ASTNode) => {
   if (typeof value !== 'string') {
@@ -16,9 +11,12 @@ const validate = (value: unknown, ast?: ASTNode) => {
     )
   }
 
-  if (!SHA256_REGEX.test(value)) {
+  try {
+    CID.parse(value)
+  }
+  catch {
     throw new GraphQLError(
-      `Value is not a valid Asset ID: ${value}`,
+      `Value is not a valid Asset ID (CID): ${value}`,
       ast ? { nodes: ast } : undefined,
     )
   }
@@ -37,7 +35,7 @@ const serialize = (value: unknown) => {
 
 export const AssetIdScalar = new GraphQLScalarType({
   name: 'AssetId',
-  description: 'AssetId custom scalar type (SHA256)',
+  description: 'AssetId custom scalar type (CID)',
   serialize: serialize, // Allow null for optional fields during serialization
   parseValue: validate, // Validate inputs strictly
   parseLiteral(ast) {
@@ -52,10 +50,5 @@ export const AssetIdScalar = new GraphQLScalarType({
   },
   extensions: {
     codegenScalarType: 'string',
-    jsonSchema: {
-      title: 'AssetId',
-      type: 'string',
-      pattern: SHA256_REGEX.source,
-    },
   },
 })

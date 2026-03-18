@@ -10,7 +10,7 @@
 // Auto-load configuration before importing other modules
 import './config.js'
 
-import type { ActionId, DictLazyAsset } from 'playtiss'
+import type { ActionId, DictAsset } from 'playtiss'
 import { runWorker } from './index.js'
 import type { RunnerContext } from './runner.js'
 
@@ -18,8 +18,8 @@ import type { RunnerContext } from './runner.js'
 export const ACTION_ID_ADD_TWO = '01977aaa-7b52-8f28-8a82-b79755000001'
 
 class ErrorWithOutput extends Error {
-  output?: DictLazyAsset
-  constructor(message: string, output?: DictLazyAsset) {
+  output?: DictAsset
+  constructor(message: string, output?: DictAsset) {
     super(message)
     this.output = output
   }
@@ -28,7 +28,7 @@ class ErrorWithOutput extends Error {
 /**
  * Add two integer inputs together
  */
-export async function addTwo(asset: DictLazyAsset, context: RunnerContext): Promise<DictLazyAsset> {
+export async function addTwo(asset: DictAsset, context: RunnerContext): Promise<DictAsset> {
   console.info(`Processing add_two task ${context.taskId}`)
 
   if (!('A' in asset)) {
@@ -56,7 +56,7 @@ export async function addTwo(asset: DictLazyAsset, context: RunnerContext): Prom
     throw error
   }
 
-  const result: DictLazyAsset = { output: a + b }
+  const result: DictAsset = { output: a + b }
   console.info(`Add_two result: ${a} + ${b} = ${result.output}`)
   return result
 }

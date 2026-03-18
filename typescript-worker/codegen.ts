@@ -20,7 +20,7 @@ const config: CodegenConfig = {
           TraceId: "playtiss#TraceId",
           ActionId: "playtiss#ActionId",
           SystemActionId: "playtiss#SystemActionId",
-          DictJSONAsset: "playtiss/types/json#DictJSONAsset",
+          DictJSONAsset: "playtiss#DictAsset",
         },
       },
     },

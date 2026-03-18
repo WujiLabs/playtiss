@@ -10,8 +10,8 @@
  * playtiss-action-runner runner.py implementation. It handles task claiming,
  * execution, and result reporting.
  */
-import type { ActionId, CompoundAssetId, Creator, DictLazyAsset, TraceId } from 'playtiss'
-import { isCompoundAssetId, isReference, toAssetId } from 'playtiss'
+import type { ActionId, AssetId, Creator, DictAsset, TraceId } from 'playtiss'
+import { isLink } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
 import { GraphQLClient } from './graphql-client.js'
 import { TaskIterator, type TaskInfo } from './task-iterator.js'
@@ -29,15 +29,15 @@ export interface RunnerContext {
   getCreatorId: FetchCreatorIdType
 }
 
-export type ProgressUpdateType = (asset: DictLazyAsset) => Promise<void>
+export type ProgressUpdateType = (asset: DictAsset) => Promise<void>
 export type FetchCreatorType = () => Promise<Creator | null>
 export type FetchCreatorIdType = () => Promise<string | null>
-export type CallbackType = (input: DictLazyAsset, context: RunnerContext) => Promise<DictLazyAsset>
+export type CallbackType = (input: DictAsset, context: RunnerContext) => Promise<DictAsset>
 
 /**
  * Store asset with enhanced error handling and context
  */
-function safeStore(asset: DictLazyAsset, context: string = 'asset'): Promise<CompoundAssetId> {
+function safeStore(asset: DictAsset, context: string = 'asset'): Promise<AssetId> {
   try {
     console.debug(`Storing ${context}:`, typeof asset)
     const assetHash = store(asset)
@@ -53,7 +53,7 @@ function safeStore(asset: DictLazyAsset, context: string = 'asset'): Promise<Com
 /**
  * Read task input from asset store via GraphQL
  */
-async function readTaskInput(taskId: string, client: GraphQLClient): Promise<DictLazyAsset | null> {
+async function readTaskInput(taskId: string, client: GraphQLClient): Promise<DictAsset | null> {
   console.info(`Attempting to read task input for ${taskId}`)
 
   try {
@@ -77,20 +77,14 @@ async function readTaskInput(taskId: string, client: GraphQLClient): Promise<Dic
     console.info(`Found inputsContentHash from GraphQL: ${inputsContentHash}`)
 
     // Load the actual input asset
-    const assetId = `@${inputsContentHash}`
-    console.info(`Loading input asset: ${assetId}`)
-
-    if (!isCompoundAssetId(assetId)) {
-      console.error(`Invalid compound asset ID format: ${assetId}`)
-      return null
-    }
+    console.info(`Loading input asset: ${inputsContentHash}`)
 
     try {
-      const inputData = await load(assetId as CompoundAssetId)
+      const inputData = await load(inputsContentHash as AssetId)
       console.info(`Loaded input data:`, inputData)
 
       if (typeof inputData === 'object' && inputData !== null && !Array.isArray(inputData) && !(inputData instanceof Uint8Array)) {
-        return inputData as DictLazyAsset
+        return inputData as DictAsset
       }
       else {
         console.error(`Input data is not a dict: ${typeof inputData}`, inputData)
@@ -145,8 +139,8 @@ async function computeTaskCreatorStr(taskId: TraceId, client: GraphQLClient): Pr
   if (creator === null) {
     return null
   }
-  if (isReference(creator)) {
-    return creator.ref
+  if (isLink(creator)) {
+    return creator.toString()
   }
   if (typeof creator === 'string') {
     return `"${creator}"` // escape by double quoting
@@ -280,12 +274,12 @@ export async function handleNewTask(
       throw new Error('input asset not valid')
     }
 
-    let outputAsset: DictLazyAsset | null = null
+    let outputAsset: DictAsset | null = null
     let success = true
 
     try {
       // Progress update callback
-      const updateCallback: ProgressUpdateType = async (asset: DictLazyAsset) => {
+      const updateCallback: ProgressUpdateType = async (asset: DictAsset) => {
         if (timeoutInterval !== undefined) {
           asset = { ...asset }
           asset.worker_report_timeout = getFutureTimestamp(timeoutInterval)
@@ -314,7 +308,7 @@ export async function handleNewTask(
 
       // Store error information if provided
       if (err instanceof Error && 'output' in err && typeof err.output === 'object') {
-        outputAsset = err.output as (DictLazyAsset | null)
+        outputAsset = err.output as (DictAsset | null)
       }
       else {
         outputAsset = {
@@ -342,7 +336,7 @@ export async function handleNewTask(
       const version = await client.createVersion({
         taskId: taskId as TraceId,
         versionType,
-        assetContentHash: toAssetId(assetHash),
+        assetContentHash: assetHash,
         commitMessage: success ? 'Task completion' : 'Task failed',
       })
       console.info(`Version created:`, version)
@@ -391,7 +385,7 @@ export async function handleNewTask(
     }
     else {
       // No output - report failure
-      const errorAsset: DictLazyAsset = {
+      const errorAsset: DictAsset = {
         error: 'No output produced',
         error_type: 'NoOutputError',
       }
@@ -399,7 +393,7 @@ export async function handleNewTask(
       const version = await client.createVersion({
         taskId: taskId as TraceId,
         versionType: 'ERROR',
-        assetContentHash: toAssetId(assetHash),
+        assetContentHash: assetHash,
         commitMessage: 'Task failed - no output',
       })
 
@@ -446,7 +440,7 @@ export async function handleNewTask(
     // Try to report failure if we have a client
     if (!testRun) {
       try {
-        const errorAsset: DictLazyAsset = {
+        const errorAsset: DictAsset = {
           error: error instanceof Error ? error.message : String(error),
           error_type: error instanceof Error ? error.constructor.name : 'UnknownError',
         }
@@ -454,7 +448,7 @@ export async function handleNewTask(
         const version = await client.createVersion({
           taskId: taskId as TraceId,
           versionType: 'ERROR',
-          assetContentHash: toAssetId(assetHash),
+          assetContentHash: assetHash,
           commitMessage: 'Task handler error',
         })
 
@@ -734,11 +728,11 @@ export async function mandatoryTaskRunner(
       console.info(`Successfully claimed task ${taskId}`)
     }
 
-    let outputAsset: DictLazyAsset | null = null
+    let outputAsset: DictAsset | null = null
     let success = true
 
     try {
-      const updateCallback: ProgressUpdateType = async (asset: DictLazyAsset) => {
+      const updateCallback: ProgressUpdateType = async (asset: DictAsset) => {
         if (timeoutInterval !== undefined) {
           asset = { ...asset }
           asset.worker_report_timeout = getFutureTimestamp(timeoutInterval)
@@ -761,7 +755,7 @@ export async function mandatoryTaskRunner(
       console.error(`Mandatory task execution failed:`, err)
       success = false
       if (err instanceof Error && 'output' in err && typeof err.output === 'object') {
-        outputAsset = err.output as (DictLazyAsset | null)
+        outputAsset = err.output as (DictAsset | null)
       }
       else {
         outputAsset = {
@@ -777,7 +771,7 @@ export async function mandatoryTaskRunner(
     const version = await client.createVersion({
       taskId,
       versionType,
-      assetContentHash: toAssetId(assetHash),
+      assetContentHash: assetHash,
       commitMessage: success ? 'Mandatory task completion' : 'Mandatory task failed',
     })
 

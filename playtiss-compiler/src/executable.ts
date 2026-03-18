@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { CompoundAssetReference, isReference, toAssetId, type AssetId, type CompoundAssetId, type DictLazyAsset, type LazyAsset } from 'playtiss'
+import { type AssetId, type AssetValue, type DictAsset } from 'playtiss'
 import { store as defaultStore } from 'playtiss/asset-store'
 import { isConstNode, type ConstNode, type Edge, type Node, type Pipeline } from 'playtiss/pipeline'
 import { parse } from './parser.js'
@@ -16,7 +16,7 @@ import type {
  * Store function type for asset storage
  * Accepts any asset and returns a CompoundAssetId
  */
-export type StoreFunction = (asset: DictLazyAsset) => Promise<CompoundAssetId>
+export type StoreFunction = (asset: DictAsset) => Promise<AssetId>
 
 /**
  * Convert PFMWorkflow (intermediate) to Pipeline (executable)
@@ -37,8 +37,8 @@ export async function toExecutable(
   const nodes: Record<string, Node> = {}
   const edges: Record<string, Edge> = {}
 
-  // Map section → CompoundAssetId
-  const sectionToId = new Map<SectionNumber, CompoundAssetId>()
+  // Map section → AssetId
+  const sectionToId = new Map<SectionNumber, AssetId>()
 
   // Create nodes using proper action types (Pattern 4)
   for (const pfmNode of pfm.nodes) {
@@ -78,7 +78,7 @@ export async function toExecutable(
         asset_type: 'pipeline_node',
         action: 'const',
         use_task_creator: false,
-        value: valueParam as LazyAsset,
+        value: valueParam as AssetValue,
         creator: 'compiler',
         timestamp: Date.now(),
       } satisfies ConstNode
@@ -93,10 +93,9 @@ export async function toExecutable(
       }
     }
 
-    const nodeId = await store(node) // Returns CompoundAssetId (@hash)
+    const nodeId = await store(node)
     sectionToId.set(pfmNode.section, nodeId)
-    // Pipeline.nodes uses AssetId (hash without @) as key
-    nodes[toAssetId(nodeId)] = node
+    nodes[nodeId] = node
   }
 
   // Create edges from dependencies
@@ -117,20 +116,19 @@ export async function toExecutable(
       const edge: Edge = {
         asset_type: 'pipeline_edge',
         source: {
-          node: new CompoundAssetReference(toAssetId(sourceId), null),
+          node: sourceId,
           name: dep.outputKey,
         },
         target: {
-          node: new CompoundAssetReference(toAssetId(targetId), null),
+          node: targetId,
           name: dep.outputKey, // Use outputKey as parameter name
         },
         creator: 'compiler',
         timestamp: Date.now(),
       }
 
-      const edgeId = await store(edge) // Returns CompoundAssetId (@hash)
-      // Pipeline.edges uses AssetId (hash without @) as key
-      edges[toAssetId(edgeId)] = edge
+      const edgeId = await store(edge)
+      edges[edgeId] = edge
     }
   }
 
@@ -201,12 +199,11 @@ export function tryStringify(pipeline: Pipeline): string {
     const dependencies: PFMWikiLink[] = []
     const edges = Object.values(pipeline.edges) as Edge[]
     for (const edge of edges) {
-      const targetNodeId = edge.target.node?.ref
-      // Edge refs are CompoundAssetId (@hash), convert to AssetId for comparison
-      if (targetNodeId && toAssetId(targetNodeId) === nodeId) {
-        const sourceNodeId = edge.source.node?.ref
+      const targetNodeId = edge.target.node
+      if (targetNodeId && targetNodeId === nodeId) {
+        const sourceNodeId = edge.source.node
         if (sourceNodeId) {
-          const sourceAssetId = toAssetId(sourceNodeId)
+          const sourceAssetId = sourceNodeId
           const sourceSection = nodeToSection.get(sourceAssetId) || '?'
           const sourceNode = pipeline.nodes[sourceAssetId]
           if (sourceNode) {
@@ -280,14 +277,9 @@ function formatActionName(action: UserActionId | SystemActionId | BuiltinAction)
  * Format const node value for display
  * Handles references (CompoundAssetReference, BinaryAssetReference) and binary buffers
  */
-function formatConstValue(value: LazyAsset): string {
+function formatConstValue(value: AssetValue): string {
   if (value === undefined) return 'undefined'
   if (value === null) return 'null'
-
-  // Handle asset references - display the ref string (@hash or #hash)
-  if (isReference(value)) {
-    return value.ref
-  }
 
   // Handle Uint8Array (binary buffer)
   if (value instanceof Uint8Array) {

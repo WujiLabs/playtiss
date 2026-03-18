@@ -9,7 +9,7 @@
 // Auto-load configuration before importing other modules
 import './config.js'
 
-import type { ActionId, DictLazyAsset } from 'playtiss'
+import type { ActionId, DictAsset } from 'playtiss'
 import { isTraceId } from 'playtiss/types/trace_id'
 import { getWorkerConfig, validateConfig } from './config.js'
 import { createClient } from './graphql-client.js'
@@ -208,9 +208,9 @@ export async function runWorker(
  * Example task execution function for demonstration
  */
 export async function exampleTaskExecutor(
-  input: DictLazyAsset,
+  input: DictAsset,
   context: import('./runner.js').RunnerContext,
-): Promise<DictLazyAsset> {
+): Promise<DictAsset> {
   console.log(`Example task ${context.taskId} executing with input:`, input)
 
   // Simulate some work

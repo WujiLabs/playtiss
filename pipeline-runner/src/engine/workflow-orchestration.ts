@@ -14,9 +14,8 @@
  */
 
 import {
-  CompoundAssetReference,
   type AssetId,
-  type DictLazyAsset,
+  type DictAsset,
   type TraceId,
 } from 'playtiss'
 import { type Pipeline } from 'playtiss/pipeline'
@@ -166,7 +165,7 @@ async function parseWorkflowDefinition(
   workflowTask: Task,
   graphqlClient: PipelineGraphQLClient,
 ): Promise<{
-  pipelineRef: CompoundAssetReference<Pipeline>
+  pipelineRef: AssetId
   definitionHash: AssetId
 }> {
   // Get action details to find workflow definition hash
@@ -185,15 +184,10 @@ async function parseWorkflowDefinition(
     .asset_content_hash as AssetId
 
   // Load workflow definition from asset store (with caching)
-  const definition = await getWorkflowDefinition(definitionHash)
+  await getWorkflowDefinition(definitionHash)
 
-  // Create pipeline reference
-  const pipelineRef = new CompoundAssetReference<Pipeline>(
-    definitionHash,
-    async () => {
-      return definition
-    },
-  )
+  // pipelineRef is now just the AssetId directly
+  const pipelineRef = definitionHash
 
   return { pipelineRef, definitionHash }
 }
@@ -204,7 +198,7 @@ async function parseWorkflowDefinition(
  */
 async function processCompletedTask(
   task: Task,
-  pipelineRef: CompoundAssetReference<Pipeline>,
+  pipelineRef: AssetId,
   workerId: string,
   workflowRevisionId: TraceId,
   graphqlClient: PipelineGraphQLClient,
@@ -217,7 +211,7 @@ async function processCompletedTask(
   }
 
   // Step 1: Load output asset
-  const output = await loadCached(`@${task.currentVersion.asset_content_hash}`)
+  const output = await loadCached(task.currentVersion.asset_content_hash as AssetId)
 
   // Step 2: Call onTaskDelivered to propagate to dependent tasks
   const dependentTasks = await onTaskDelivered(
@@ -272,7 +266,7 @@ async function processCompletedTask(
  */
 async function processFailedTask(
   task: Task,
-  pipelineRef: CompoundAssetReference<Pipeline>,
+  pipelineRef: AssetId,
   workerId: string,
   workflowRevisionId: TraceId,
   graphqlClient: PipelineGraphQLClient,
@@ -280,10 +274,10 @@ async function processFailedTask(
   const taskId = task.id!
 
   // Step 1: Load error output (or use empty object)
-  let errorOutput = {}
+  let errorOutput: import('playtiss').AssetValue = {}
   if (task.currentVersion?.asset_content_hash) {
     errorOutput = await loadCached(
-      `@${task.currentVersion.asset_content_hash}`,
+      task.currentVersion.asset_content_hash as AssetId,
     )
   }
 
@@ -323,10 +317,9 @@ async function getWorkflowDefinition(
   }
 
   // Load from asset store
-  const compoundId = `@${definitionHash}` as const
-  const definition = (await loadCached(compoundId)) as DictLazyAsset
+  const definition = (await loadCached(definitionHash)) as unknown as Pipeline
 
-  if (!isPipeline(definition)) {
+  if (!isPipeline(definition as unknown)) {
     throw new Error(
       `Asset ${definitionHash} is not a valid pipeline definition`,
     )

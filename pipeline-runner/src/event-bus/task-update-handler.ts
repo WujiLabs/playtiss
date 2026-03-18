@@ -23,7 +23,6 @@
  */
 
 import type { AssetId, TraceId } from 'playtiss'
-import { CompoundAssetReference } from 'playtiss'
 import type { Pipeline } from 'playtiss/pipeline'
 import type { UserActionId } from 'playtiss/types/playtiss'
 import type { PipelineGraphQLClient } from '../graphql/pipeline.js'
@@ -86,14 +85,13 @@ export async function handleTaskCompletedEvent(
     }
 
     // Step 3: Load the actual output data (same as orchestrator line 491-494)
-    const outputCompoundId
-      = `@${task.currentVersion.asset_content_hash}` as const
+    const outputAssetId = task.currentVersion.asset_content_hash as AssetId
     console.log(
-      `📦 Loading output asset for task ${task_id}: ${outputCompoundId}`,
+      `📦 Loading output asset for task ${task_id}: ${outputAssetId}`,
     )
-    const actualOutput = await loadCached(outputCompoundId)
+    const actualOutput = await loadCached(outputAssetId)
     console.log(
-      `📦 Loaded asset has ${Object.keys(actualOutput).length} top-level keys`,
+      `📦 Loaded asset has ${typeof actualOutput === 'object' && actualOutput !== null ? Object.keys(actualOutput).length : 0} top-level keys`,
     )
 
     // Step 4: Find all ACTIVE workflow revisions that use this task
@@ -178,7 +176,7 @@ export async function handleTaskCompletedEvent(
 
       const definitionHash = actionDetails.currentVersion
         .asset_content_hash as AssetId
-      const pipelineRef = new CompoundAssetReference<Pipeline>(definitionHash, null)
+      const pipelineRef = definitionHash
 
       // **THIS IS THE KEY CALL** - Same as WorkflowOrchestrator.handleSubtaskSuccess() line 507
       // This will call processNodeSlotInfo() and generate dependent tasks
@@ -257,7 +255,7 @@ export async function handleTaskFailedEvent(
     }
 
     // Step 2: Load error output if available (orchestrator line 556-564)
-    let errorOutput = {} // Default empty error
+    let errorOutput: import('playtiss').AssetValue = {} // Default empty error
     if (task.currentVersion) {
       if (task.currentVersion.type !== 'ERROR') {
         console.warn(
@@ -266,9 +264,7 @@ export async function handleTaskFailedEvent(
       }
       else if (task.currentVersion.asset_content_hash) {
         // Load the actual error data from the asset store
-        const errorCompoundId
-          = `@${task.currentVersion.asset_content_hash}` as const
-        errorOutput = await loadCached(errorCompoundId)
+        errorOutput = await loadCached(task.currentVersion.asset_content_hash as AssetId)
       }
     }
 
@@ -350,7 +346,7 @@ export async function handleTaskFailedEvent(
 
       const definitionHash = actionDetails.currentVersion
         .asset_content_hash as AssetId
-      const pipelineRef = new CompoundAssetReference<Pipeline>(definitionHash, null)
+      const pipelineRef = definitionHash
 
       // Call onTaskAborted (orchestrator line 575)
       await onTaskAborted(
@@ -464,7 +460,7 @@ export async function handleStaleUpdateRevisionCreated(
 
     const definitionHash = actionDetails.currentVersion
       .asset_content_hash as AssetId
-    const pipelineRef = new CompoundAssetReference<Pipeline>(definitionHash, null)
+    const pipelineRef = definitionHash
 
     // Step 3: Get all node states from the new revision
     // Note: We query the WorkflowRevision which includes all node states
@@ -540,7 +536,7 @@ export async function handleStaleUpdateRevisionCreated(
  */
 async function processStaleNode(
   nodeState: workflowRevisionNodeState,
-  pipelineRef: CompoundAssetReference<Pipeline>,
+  pipelineRef: AssetId,
   workflowRevisionId: TraceId,
   workerId: string,
   graphqlClient: PipelineGraphQLClient,
@@ -577,7 +573,7 @@ async function processStaleNode(
     }
 
     // Step 3: Load workflow definition to get node action
-    const pipelineDefinition = await loadCached(pipelineRef.ref) as unknown as Pipeline
+    const pipelineDefinition = await loadCached(pipelineRef) as unknown as Pipeline
     const nodeDefinition = pipelineDefinition.nodes[nodeId as AssetId]
     if (!nodeDefinition) {
       console.error(`❌ Node ${nodeId} not found in workflow definition`)
@@ -588,7 +584,7 @@ async function processStaleNode(
     console.log(
       `📦 Loading inputs from hash ${nodeState.lastInputsHash} for node ${nodeId}`,
     )
-    const inputs = await loadCached(`@${nodeState.lastInputsHash}`)
+    const inputs = await loadCached(nodeState.lastInputsHash as AssetId)
 
     // Step 5: Create or find task using stored inputs
     // The createTask method will handle deduplication via UNIQUE constraint
@@ -599,7 +595,7 @@ async function processStaleNode(
 
     taskId = await graphqlClient.createTask(
       nodeDefinition.action as UserActionId,
-      inputs,
+      inputs as import('playtiss').DictAsset,
     )
 
     console.log(`📋 Task created/found: ${taskId}`)
@@ -635,7 +631,7 @@ async function processStaleNode(
     )
     // Load output and propagate to downstream nodes
     const output = await loadCached(
-      `@${task.currentVersion.asset_content_hash}`,
+      task.currentVersion.asset_content_hash as AssetId,
     )
     await onTaskDelivered(
       { task, output },
@@ -654,7 +650,7 @@ async function processStaleNode(
       `💥 Task ${task.id} already failed (reused from cache), propagating error`,
     )
     const errorOutput = await loadCached(
-      `@${task.currentVersion.asset_content_hash}`,
+      task.currentVersion.asset_content_hash as AssetId,
     )
     await onTaskAborted(
       { task, output: errorOutput },
@@ -712,8 +708,8 @@ export async function handlePlayerSubmittedEvent(
     }
 
     // Step 2: Load player-submitted output
-    const playerOutput = await loadCached(`@${output_asset_id}`)
-    console.log(`📦 Loaded player output: ${Object.keys(playerOutput).length} top-level keys`)
+    const playerOutput = await loadCached(output_asset_id)
+    console.log(`📦 Loaded player output: ${typeof playerOutput === 'object' && playerOutput !== null ? Object.keys(playerOutput).length : 0} top-level keys`)
 
     // Step 3: Get workflow definition
     const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflow_revision_id, graphqlClient)
@@ -735,7 +731,7 @@ export async function handlePlayerSubmittedEvent(
     }
 
     const definitionHash = actionDetails.currentVersion.asset_content_hash as AssetId
-    const pipelineRef = new CompoundAssetReference<Pipeline>(definitionHash, null)
+    const pipelineRef = definitionHash
 
     // Step 4: Call onTaskDelivered - this will mark downstream nodes as STALE via processNodeReady
     console.log(`🔄 Propagating player input to downstream nodes...`)
@@ -819,7 +815,7 @@ export async function handlePlayerFailedEvent(
     }
 
     const definitionHash = actionDetails.currentVersion.asset_content_hash as AssetId
-    const pipelineRef = new CompoundAssetReference<Pipeline>(definitionHash, null)
+    const pipelineRef = definitionHash
 
     // Step 4: Call onTaskAborted to propagate failure
     console.log(`🔄 Propagating player failure to workflow...`)

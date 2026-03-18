@@ -49,10 +49,6 @@
       "types": "./dist/utils/promise_map.d.ts",
       "import": "./dist/utils/promise_map.js"
     },
-    "./types/reference": {
-      "types": "./dist/types/reference.d.ts",
-      "import": "./dist/types/reference.js"
-    },
     "./types/trace_id": {
       "types": "./dist/types/trace_id.d.ts",
       "import": "./dist/types/trace_id.js"
@@ -77,7 +73,9 @@
     "@aws-sdk/client-s3": "catalog:",
     "@aws-sdk/credential-providers": "catalog:",
     "@aws-sdk/s3-request-presigner": "catalog:",
-    "@smithy/types": "catalog:"
+    "@ipld/dag-json": "catalog:",
+    "@smithy/types": "catalog:",
+    "multiformats": "catalog:"
   },
   "optionalDependencies": {
     "dotenv": "catalog:",

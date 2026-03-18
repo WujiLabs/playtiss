@@ -4,13 +4,12 @@ import {
   actionIdToDbFormat,
   default_scope_id,
   isSystemAction,
-  toAssetId,
   type ActionId,
-  type DictLazyAsset,
-  type LazyAsset,
+  type AssetValue,
+  type DictAsset,
 } from 'playtiss'
 import { store } from 'playtiss/asset-store'
-import { jsonify, parseAssetText, type DictJSONAsset } from 'playtiss/types/json'
+import { decodeFromString, encodeToString } from 'playtiss/types/json'
 import {
   TraceIdGenerator,
   parseTraceId,
@@ -507,7 +506,7 @@ export const createVersion = async (
 // v12 Handle-Based API: Request execution and return a stable Handle ID
 export const requestExecution = async (
   _parent: unknown,
-  args: { actionId: ActionId, input: DictLazyAsset },
+  args: { actionId: ActionId, input: DictAsset },
 ): Promise<TraceId> => {
   // Returns Handle ID
   const { actionId, input } = args
@@ -519,7 +518,7 @@ export const requestExecution = async (
   const timestamp = getTimestampFromTraceId(handleId)
 
   // Store the input object to get its AssetId
-  const inputAssetId = toAssetId(await store(input))
+  const inputAssetId = await store(input)
 
   // Check if a task with the same inputs already exists
   const existingTaskId = await findExistingTask(db, actionId, inputAssetId)
@@ -730,7 +729,7 @@ export const requestExecution = async (
 // Legacy mutation - to be removed after migration
 export const requestWorkflowRevision = async (
   _parent: unknown,
-  args: { actionId: TraceId, input: DictLazyAsset },
+  args: { actionId: TraceId, input: DictAsset },
 ): Promise<WorkflowRevision> => {
   // Return non-nullable
   const { actionId, input } = args // input is a JS object from DictJSONAssetScalar
@@ -738,7 +737,7 @@ export const requestWorkflowRevision = async (
   const generator = getOperationTraceIdGenerator() // Defaults to resetting context
 
   // Store the input object to get its CompoundAssetId
-  const inputAssetId = toAssetId(await store(input)) // This is the new part
+  const inputAssetId = await store(input)
 
   const workflowInstanceTaskId = generator.generate()
   const newRevisionId = generator.generate() // Share same operation context
@@ -1029,9 +1028,7 @@ export const requestStaleNodesUpdate = async (
       currentRevisionId: currentRevisionId,
       staleNodeIds: nodeIds || null,
     }
-    const commandAssetId = toAssetId(
-      await store(commandParams as DictLazyAsset),
-    )
+    const commandAssetId = await store(commandParams as DictAsset)
 
     // Output includes NEW revision ID - the result of the update operation
     const outputAsset = {
@@ -1040,7 +1037,7 @@ export const requestStaleNodesUpdate = async (
       staleNodeIds: nodeIds || null,
       parentRevisionId: currentRevisionId,
     }
-    const outputAssetId = toAssetId(await store(outputAsset as DictLazyAsset))
+    const outputAssetId = await store(outputAsset as DictAsset)
 
     // Step 5: Create Job Task (non-transactional)
     await new Promise<void>((resolve, reject) => {
@@ -1526,7 +1523,7 @@ export const createWorkflowDefinitionVersion = async (
   _parent: unknown,
   args: {
     actionId: TraceId
-    workflowDefinition: DictLazyAsset
+    workflowDefinition: DictAsset
     commitMessage?: string | null
   },
 ): Promise<Version> => {
@@ -1535,7 +1532,7 @@ export const createWorkflowDefinitionVersion = async (
   const generator = getOperationTraceIdGenerator()
 
   // Store the workflow definition object to get its AssetId
-  const workflowAssetId = toAssetId(await store(workflowDefinition))
+  const workflowAssetId = await store(workflowDefinition)
 
   const versionId = generator.generate()
   const timestamp = getTimestampFromTraceId(versionId)
@@ -1858,7 +1855,7 @@ export const setMergeAccumulator = async (
     workflowRevisionId: TraceId
     contextAssetHash: AssetId
     nodeId: string
-    accumulatorData: DictLazyAsset
+    accumulatorData: DictAsset
   },
 ): Promise<boolean> => {
   const {
@@ -1877,8 +1874,7 @@ export const setMergeAccumulator = async (
         db.run('BEGIN TRANSACTION', (err) => {
           if (err) return reject(err)
 
-          const jsonData = jsonify(accumulatorData) as DictJSONAsset
-          const insertedJsonString = JSON.stringify(jsonData)
+          const insertedJsonString = encodeToString(accumulatorData)
 
           db.run(
             `INSERT OR REPLACE INTO PipelineMergeAccumulator
@@ -1925,9 +1921,9 @@ export const mergeMergeAccumulator = async (
     contextAssetHash: AssetId
     nodeId: string
     key: string
-    value: LazyAsset
+    value: AssetValue
   },
-): Promise<DictLazyAsset> => {
+): Promise<DictAsset> => {
   const {
     pipelineId,
     workflowRevisionId,
@@ -1940,7 +1936,7 @@ export const mergeMergeAccumulator = async (
   return serializeMutation('mergeMergeAccumulator', async () => {
     const db = getDB()
 
-    return new Promise<DictLazyAsset>((resolve, reject) => {
+    return new Promise<DictAsset>((resolve, reject) => {
       db.serialize(() => {
         db.run('BEGIN TRANSACTION', (err) => {
           if (err) return reject(err)
@@ -1957,14 +1953,14 @@ export const mergeMergeAccumulator = async (
               }
 
               try {
-                const current: DictJSONAsset = row?.accumulator_json
-                  ? JSON.parse(row.accumulator_json)
+                const current: DictAsset = row?.accumulator_json
+                  ? decodeFromString(row.accumulator_json) as DictAsset
                   : {}
 
                 // Update with new key/value
-                current[key] = jsonify(value)
+                current[key] = value
 
-                const mergedJsonString = JSON.stringify(current)
+                const mergedJsonString = encodeToString(current)
 
                 // Upsert back to database
                 db.run(
@@ -1989,7 +1985,7 @@ export const mergeMergeAccumulator = async (
                         db.run('ROLLBACK')
                         return reject(err)
                       }
-                      resolve(parseAssetText(mergedJsonString) as DictLazyAsset)
+                      resolve(decodeFromString(mergedJsonString) as DictAsset)
                     })
                   },
                 )

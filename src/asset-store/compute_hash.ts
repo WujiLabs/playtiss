@@ -1,130 +1,84 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
-import type { AssetId, CompoundLazyAsset, LazyAsset } from '../index.js'
-import {
-  BinaryAssetReference,
-  CompoundAssetReference,
-  isReference,
-  type Reference,
-} from '../types/reference.js'
-import promise_map from '../utils/promise_map.js'
+import * as Block from 'multiformats/block'
+import * as dagJSON from '@ipld/dag-json'
+import { CID } from 'multiformats/cid'
+import { sha256 } from 'multiformats/hashes/sha2'
+import * as raw from 'multiformats/codecs/raw'
+import type { AssetId, AssetValue } from '../index.js'
 
-// A (shallow) type disallowing nested object or array
-// They get serialized and hashed first, and get replaced by the computed hash
-// for upper level serialization
-type HashableAsset = { [x: string]: Literal } | Literal[] | Literal
-
-type Literal = number | boolean | null | string | Reference
-
-const computeBinaryHash = async (input: ArrayBufferView): Promise<AssetId> => {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', input)
-  const hashArray = Array.from(new Uint8Array(digest)) // convert buffer to byte array
-  const hashHex = hashArray
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('') // convert bytes to hex string
-  return hashHex as AssetId
-}
-const computeStringHash = async (input: string): Promise<AssetId> => {
-  // console.log("hashing:", input);
-  const msgUint8 = new TextEncoder().encode(input) // encode as (utf-8) Uint8Array
-  const ret = await computeBinaryHash(msgUint8)
-  // console.log("result:", ret);
-  return ret
-}
-
-const isLiteral = (input: LazyAsset): input is Literal => {
-  return (
-    input === null
-    || typeof input === 'boolean'
-    || typeof input === 'number'
-    || typeof input === 'string'
-    || isReference(input)
+/**
+ * Recursively flatten an AssetValue so every nested object, array,
+ * and binary buffer is replaced by its content-addressed CID.
+ * The result is a primitive or CID — no nested structures remain.
+ * Pure (no storage I/O).
+ */
+async function flatten(value: AssetValue): Promise<AssetValue> {
+  if (value instanceof CID) return value
+  if (value === null || typeof value !== 'object') return value
+  if (value instanceof Uint8Array) {
+    const { cid } = await Block.encode({ value, codec: raw, hasher: sha256 })
+    return cid
+  }
+  if (Array.isArray(value)) {
+    const items = await Promise.all(value.map(v => flatten(v)))
+    const { cid } = await Block.encode({ value: items, codec: dagJSON, hasher: sha256 })
+    return cid
+  }
+  // Object: flatten each value then encode this level as a block, returning a CID
+  const flat = Object.fromEntries(
+    await Promise.all(Object.entries(value).map(async ([k, v]) => [k, await flatten(v)])),
   )
+  const { cid } = await Block.encode({ value: flat, codec: dagJSON, hasher: sha256 })
+  return cid
 }
 
-const stringifyLiteral = (input: Literal): string => {
-  if (typeof input === 'boolean') {
-    return input ? 'true' : 'false'
+/**
+ * Compute the top-level content-addressed block for any AssetValue.
+ *
+ * Applies full Merkle-ization: every nested object/array/binary is replaced
+ * by its CID before encoding the top-level block. Returns the CID, encoded
+ * bytes, and the flattened value (with sub-values as CID links).
+ *
+ * Pure function — no storage side effects.
+ */
+export async function computeTopBlock(input: AssetValue): Promise<{
+  cid: CID
+  bytes: Uint8Array
+  flatValue: AssetValue
+}> {
+  if (input instanceof Uint8Array) {
+    const block = await Block.encode({ value: input, codec: raw, hasher: sha256 })
+    return { cid: block.cid, bytes: block.bytes, flatValue: input }
   }
-  if (typeof input === 'number') {
-    return input.toString()
-  }
-  if (input === null) {
-    return 'null'
-  }
-  if (typeof input === 'string') {
-    return JSON.stringify(input)
-  }
-  // Reference
-  return input.ref
-}
-
-const stringify = (input: HashableAsset): string => {
-  if (isLiteral(input)) {
-    return stringifyLiteral(input)
+  if (input === null || typeof input !== 'object') {
+    const block = await Block.encode({ value: input, codec: dagJSON, hasher: sha256 })
+    return { cid: block.cid, bytes: block.bytes, flatValue: input }
   }
   if (Array.isArray(input)) {
-    return '[' + input.map(v => stringifyLiteral(v)).join(',') + ']'
+    const items = await Promise.all(input.map(v => flatten(v)))
+    const block = await Block.encode({ value: items, codec: dagJSON, hasher: sha256 })
+    return { cid: block.cid, bytes: block.bytes, flatValue: items }
   }
-  // strings are sorted by UTF-16 code unit order
-  // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort#description
-  const keys = Object.keys(input).sort()
-  return (
-    '{'
-    + keys
-      .map(k => `${JSON.stringify(k)}:${stringifyLiteral(input[k])}`)
-      .join(',')
-      + '}'
+  const flat = Object.fromEntries(
+    await Promise.all(Object.entries(input).map(async ([k, v]) => [k, await flatten(v)])),
   )
+  const block = await Block.encode({ value: flat, codec: dagJSON, hasher: sha256 })
+  return { cid: block.cid, bytes: block.bytes, flatValue: flat }
 }
 
-const toLiteral = async (input: HashableAsset): Promise<Literal> => {
-  if (isLiteral(input)) {
-    return input
-  }
-  return new CompoundAssetReference<CompoundLazyAsset>(
-    await computeStringHash(stringify(input)),
-    async () => input,
-  )
-}
-
-const toHashable = async (input: LazyAsset): Promise<HashableAsset> => {
-  if (input instanceof Uint8Array) {
-    return new BinaryAssetReference(
-      await computeBinaryHash(input),
-      async () => input,
-    )
-  }
-  if (isLiteral(input)) {
-    return input
-  }
-  if (Array.isArray(input)) {
-    // convert each element in Array<LazyAsset> to Literal
-    return promise_map(input, async (value: LazyAsset): Promise<Literal> => {
-      return toLiteral(await toHashable(value))
-    })
-  }
-  // convert each value in Map<string, LazyAsset> to Literal
-  return Object.fromEntries(
-    await promise_map(
-      Object.entries(input),
-      async ([key, value]: [string, LazyAsset]): Promise<[string, Literal]> => {
-        return [key, await toLiteral(await toHashable(value))]
-      },
-    ),
-  )
-}
-
-export async function computeHash(input: LazyAsset): Promise<AssetId> {
-  if (isReference(input)) {
-    // Do not rehash references
-    return input.id
-  }
-  if (input instanceof Uint8Array) {
-    return computeBinaryHash(input)
-  }
-  return computeStringHash(stringify(await toHashable(input)))
+/**
+ * Compute the canonical content-addressed hash (CID) of any AssetValue.
+ *
+ * Uses full Merkle-ization: nested objects, arrays, and binary buffers are
+ * recursively hashed as separate blocks. The returned CID depends on the
+ * logical content, not on whether sub-values were provided inline or as CID links.
+ *
+ * Pure function — no storage side effects.
+ */
+export async function computeHash(input: Uint8Array): Promise<AssetId>
+export async function computeHash(input: unknown): Promise<AssetId>
+export async function computeHash(input: unknown): Promise<AssetId> {
+  if (input instanceof CID) return (input as CID).toString()
+  const { cid } = await computeTopBlock(input as AssetValue)
+  return cid.toString()
 }
