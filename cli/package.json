@@ -1,0 +1,47 @@
+{
+  "name": "@playtiss/cli",
+  "version": "1.0.0",
+  "description": "CLI tool for Playtiss Kernel",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "playtiss": "dist/index.js"
+  },
+  "scripts": {
+    "build": "pnpm run codegen && tsc",
+    "codegen": "graphql-codegen --config codegen.ts",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "type-check": "tsc --noEmit",
+    "inspect:asset": "tsx dev-tools/inspect-asset.ts",
+    "inspect:task": "tsx dev-tools/inspect-task.ts",
+    "inspect:version": "tsx dev-tools/inspect-version.ts",
+    "list": "tsx dev-tools/list-entities.ts"
+  },
+  "dependencies": {
+    "@apollo/client": "^3.11.10",
+    "@graphql-typed-document-node/core": "catalog:",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "catalog:",
+    "graphql": "catalog:",
+    "playtiss": "workspace:*",
+    "react": "catalog:",
+    "sqlite3": "catalog:"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@graphql-codegen/cli": "^5.0.2",
+    "@graphql-codegen/client-preset": "^4.2.5",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.3",
+    "@types/sqlite3": "catalog:",
+    "globals": "catalog:",
+    "tsx": "^4.7.0",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "^1.6.1"
+  }
+}

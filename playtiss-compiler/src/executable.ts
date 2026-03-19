@@ -79,7 +79,7 @@ export async function toExecutable(
         action: 'const',
         use_task_creator: false,
         value: valueParam as AssetValue,
-        creator: 'compiler',
+
         timestamp: Date.now(),
       } satisfies ConstNode
     }
@@ -88,7 +88,7 @@ export async function toExecutable(
         asset_type: 'pipeline_node',
         action,
         use_task_creator: !pfmNode.builtinAction,
-        creator: 'compiler',
+
         timestamp: Date.now(),
       }
     }
@@ -123,7 +123,7 @@ export async function toExecutable(
           node: targetId,
           name: dep.outputKey, // Use outputKey as parameter name
         },
-        creator: 'compiler',
+
         timestamp: Date.now(),
       }
 
@@ -144,8 +144,6 @@ export async function toExecutable(
     input_shape: {}, // TODO: Infer from workflow inputs
     output_shape: {}, // TODO: Infer from workflow outputs
 
-    // NodeBase fields (Action extends NodeBase)
-    creator: 'compiler',
     timestamp: Date.now(),
   }
 

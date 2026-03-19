@@ -4,6 +4,7 @@ packages:
   - pipeline-runner
   - typescript-worker
   - playtiss-compiler
+  - cli
 
 catalog:
   '@ipld/dag-json': ^10.1.1

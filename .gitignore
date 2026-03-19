@@ -33,6 +33,8 @@ coverage/
 *.db
 *.db-wal
 *.db-shm
+# Exception: test database for integration tests
+!graphql-server/playtiss-test-add3.db
 
 # Serverless
 .serverless/

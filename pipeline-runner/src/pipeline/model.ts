@@ -18,7 +18,7 @@ import {
   type AssetValue,
   type DictAsset,
   type TraceId,
-  type ValueOrRef,
+  type ValueOrLink,
 } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
 import { type Node, type Pipeline } from 'playtiss/pipeline'
@@ -518,7 +518,7 @@ export async function updateAndRetrieveTaskMergeAsset(
  */
 export async function updateTaskStatus(
   _pipeline: AssetId,
-  _task: ValueOrRef<Task>,
+  _task: ValueOrLink<Task>,
   eventType: string,
 ) {
   // No-op: Task status management is handled by Workers via TaskExecutionStates

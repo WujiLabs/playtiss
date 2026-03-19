@@ -1,13 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 export type {
-  Creator,
-  EventType,
-  ValueOrRef,
-} from './types/legacy.js'
+  ValueOrLink,
+} from './types/playtiss.js'
 
 export {
   CID,

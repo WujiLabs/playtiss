@@ -3,8 +3,8 @@ import type { AssetValue, DictAsset } from '../index.js'
 import type { AssetId } from './asset_id.js'
 import type { TraceId } from './trace_id.js'
 
-// ValueOrRef<T>: either an inline value or a CID string pointing to a stored asset.
-export type ValueOrRef<T> = T | AssetId
+// ValueOrLink<T>: either an inline value or a CID string pointing to a stored asset.
+export type ValueOrLink<T> = T | AssetId
 
 export const default_scope_id = 'default'
 
@@ -14,7 +14,7 @@ type VersionBase = {
   id: VersionId
   task_id: TaskId
   version_type_tag: VersionType
-  asset: ValueOrRef<DictAsset> | null
+  asset: ValueOrLink<DictAsset> | null
   parent_version_id: VersionId | null
 
   tags: string[]
@@ -26,7 +26,7 @@ type VersionBase = {
 export type OutputVersion = VersionBase & {
   version_type_tag: 'output'
 
-  asset: ValueOrRef<DictAsset> // output asset cannot be null
+  asset: ValueOrLink<DictAsset> // output asset cannot be null
   executed_def_version_id: never
 }
 
@@ -41,7 +41,7 @@ export type ErrorVersion = VersionBase & {
 export type WorkflowDefinitionVersion = VersionBase & {
   version_type_tag: 'workflow_definition'
 
-  asset: ValueOrRef<DictAsset> // workflow definition asset cannot be null
+  asset: ValueOrLink<DictAsset> // workflow definition asset cannot be null
   executed_def_version_id: never
 }
 
@@ -69,8 +69,8 @@ export type Task = {
   id: TaskId
   scope_id: ScopeId
   action_id: ActionId
-  direct_inputs: ValueOrRef<DictAsset>
-  parameters: ValueOrRef<DictAsset>
+  direct_inputs: ValueOrLink<DictAsset>
+  parameters: ValueOrLink<DictAsset>
   name: string
   description: string
   current_version_id: VersionId

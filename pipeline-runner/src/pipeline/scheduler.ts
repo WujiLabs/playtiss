@@ -8,9 +8,8 @@ import {
   type AssetId,
   type AssetValue,
   type DictAsset,
-  type EventType,
   type SystemActionId,
-  type ValueOrRef,
+  type ValueOrLink,
 } from 'playtiss'
 import { computeHash, load, store } from 'playtiss/asset-store'
 import { type Node, type Pipeline, isConstNode } from 'playtiss/pipeline'
@@ -49,6 +48,13 @@ import {
 // When true, downstream nodes are automatically re-executed when upstream changes
 // When false (default), downstream nodes are marked STALE and wait for manual update
 const AUTO_PROPAGATE_STALE_NODES = process.env.PLAYTISS_AUTO_PROPAGATE === 'true'
+
+// ================================================================
+// TYPES
+// ================================================================
+
+/** Narrowed event type for pipeline task outcomes (replaces legacy EventType) */
+type TaskOutcome = 'deliver' | 'abort' | 'update'
 
 // ================================================================
 // OPTIMIZED HELPER FUNCTIONS (use singleton GraphQL client)
@@ -138,7 +144,7 @@ async function createTaskOptimized(
  * Optimized writeEvent using singleton GraphQL client
  * Replaces legacy writeEvent() that creates/destroys client on every call
  */
-async function writeEventOptimized(
+async function reportTaskOutcome(
   taskId: TraceId,
   eventType: string,
   output?: DictAsset,
@@ -215,15 +221,15 @@ function isPipelineOutput(
   return node === null
 }
 
-async function writePipelineEvent(
+async function reportPipelineTaskOutcome(
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   asset: DictAsset,
-  event_type: EventType,
+  event_type: TaskOutcome,
 ) {
   // write event with the correct worker ID from workflow context
-  // If no workerId is provided, writeEventOptimized will use the default 'workflow-engine'
-  const pipelineEvent = await writeEventOptimized(
+  // If no workerId is provided, reportTaskOutcome will use the default 'workflow-engine'
+  const pipelineEvent = await reportTaskOutcome(
     workflowContext.workflowTaskId,
     event_type,
     asset,
@@ -520,8 +526,9 @@ async function processNodeSlotInfo(
       }
       // 5. Now we have exclusive access for this revision - read the current merge state
       // obtain inputs on record (either pending or completed task)
-      nextAsset
-        = (await getPendingTaskInputs(
+      // Spread to create mutable copy (IPLD dag-json returns frozen objects)
+      nextAsset = {
+        ...(await getPendingTaskInputs(
           pipeline,
           nextContext,
           nextNode,
@@ -533,7 +540,8 @@ async function processNodeSlotInfo(
           nextNode,
           workflowContext,
         ))
-        || {}
+        || {},
+      }
       // Note: Lock will be released in finally block when promise resolves
     }
     await promise_map(
@@ -562,7 +570,7 @@ async function processNodeSlotInfo(
       case 'regular': {
         // for pipeline output: deliver pipeline task
         if (isPipelineOutput(nextNode)) {
-          await writePipelineEvent(
+          await reportPipelineTaskOutcome(
             nextContext,
             workflowContext,
             nextAsset,
@@ -595,7 +603,7 @@ async function processNodeSlotInfo(
           )
           // for pipeline output: deliver pipeline task
           if (isPipelineOutput(nextNode)) {
-            await writePipelineEvent(
+            await reportPipelineTaskOutcome(
               nextContext,
               workflowContext,
               nextAsset,
@@ -1257,7 +1265,7 @@ export async function onTaskAborted(
         workerId: workerId,
       }
 
-      await writePipelineEvent(
+      await reportPipelineTaskOutcome(
         currentContext,
         workflowContext,
         {
@@ -1314,7 +1322,7 @@ export async function onTaskUpdated(
         workerId: workerId,
       }
 
-      await writePipelineEvent(
+      await reportPipelineTaskOutcome(
         currentContext,
         workflowContext,
         {

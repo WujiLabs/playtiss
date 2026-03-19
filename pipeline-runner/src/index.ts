@@ -31,7 +31,7 @@ type PipelineId = UserActionId
 const MONITORED_PIPELINES: PipelineId[] = [
   // "0197a952-d7c6-8fe4-87a8-56aeb0000001" as PipelineId, // Add Three Integer (old)
   // "0197cd70-9951-8971-8fd5-04b75b000001" as PipelineId, // Add Three Numbers (previous)
-  '0197cd7a-c671-8aba-8759-9782f3000001' as PipelineId, // Add Three Numbers (latest)
+  '019d048e-d525-89ca-8fed-1f12e6000001' as PipelineId, // Add Three Numbers (IPLD test)
 ]
 
 // Main entry point

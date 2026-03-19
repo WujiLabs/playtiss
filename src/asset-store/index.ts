@@ -1,8 +1,10 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import { CID } from 'multiformats/cid'
+import * as Block from 'multiformats/block'
 import * as dagJSON from '@ipld/dag-json'
 import * as raw from 'multiformats/codecs/raw'
-import type { AssetId, AssetValue, DictAsset, ValueOrRef } from '../index.js'
+import { sha256 } from 'multiformats/hashes/sha2'
+import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '../index.js'
 import { computeTopBlock } from './compute_hash.js'
 import { fetchBuffer, hasBuffer, saveBuffer } from './storage-factory.js'
 
@@ -29,14 +31,20 @@ function collectCIDLinks(value: unknown): AssetId[] {
  */
 export async function store(input: AssetValue): Promise<AssetId> {
   if (input instanceof CID) return input.toString() as AssetId
-  const { cid, bytes } = await computeTopBlock(input)
+  // CID is computed via Merkle hash (stable whether sub-values are inline or linked)
+  const { cid } = await computeTopBlock(input)
   const id = cid.toString() as AssetId
   if (!(await hasBuffer(id))) {
+    // Store the original value as-is (not Merkle-ized), so load() returns the full object
+    const bytes = input instanceof Uint8Array
+      ? Block.encode({ value: input, codec: raw, hasher: sha256 }).then(b => b.bytes)
+      : Promise.resolve(dagJSON.encode(input))
     const refs = collectCIDLinks(input)
-    await saveBuffer(bytes, id, refs.length ? { assetReferences: refs } : undefined)
+    await saveBuffer(await bytes, id, refs.length ? { assetReferences: refs } : undefined)
   }
   return id
 }
+
 
 export async function load(id: AssetId): Promise<AssetValue> {
   const cid = CID.parse(id)
@@ -60,11 +68,11 @@ export async function resolve(value: AssetValue): Promise<AssetValue> {
   )
 }
 
-export async function toLink<T extends DictAsset>(v: ValueOrRef<T>): Promise<AssetId> {
+export async function toLink<T extends DictAsset>(v: ValueOrLink<T>): Promise<AssetId> {
   return typeof v === 'string' ? v : store(v)
 }
 
-export async function fromLink<T extends DictAsset>(v: ValueOrRef<T>): Promise<T> {
+export async function fromLink<T extends DictAsset>(v: ValueOrLink<T>): Promise<T> {
   return typeof v === 'string' ? load(v) as unknown as Promise<T> : v
 }
 

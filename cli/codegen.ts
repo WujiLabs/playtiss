@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Wuji Labs Inc
 import type { CodegenConfig } from "@graphql-codegen/cli";
 
 // Use local v3.1 GraphQL schema
@@ -7,10 +8,7 @@ const config: CodegenConfig = {
   overwrite: true,
   schema: SCHEMA_PATH,
   documents: [
-    "src/graphql/**/*.ts",
-    "src/index.ts",
-    "src/engine/**/*.ts",
-    "src/pipeline/model.ts"
+    "src/graphql/**/*.ts"
   ],
   emitLegacyCommonJSImports: false,
   generates: {

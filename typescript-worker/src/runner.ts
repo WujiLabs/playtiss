@@ -10,8 +10,7 @@
  * playtiss-action-runner runner.py implementation. It handles task claiming,
  * execution, and result reporting.
  */
-import type { ActionId, AssetId, Creator, DictAsset, TraceId } from 'playtiss'
-import { isLink } from 'playtiss'
+import type { ActionId, AssetId, DictAsset, TraceId } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
 import { GraphQLClient } from './graphql-client.js'
 import { TaskIterator, type TaskInfo } from './task-iterator.js'
@@ -25,13 +24,9 @@ type LeaseExpiredTask = {
 export interface RunnerContext {
   taskId: string
   update: ProgressUpdateType
-  getCreator: FetchCreatorType
-  getCreatorId: FetchCreatorIdType
 }
 
 export type ProgressUpdateType = (asset: DictAsset) => Promise<void>
-export type FetchCreatorType = () => Promise<Creator | null>
-export type FetchCreatorIdType = () => Promise<string | null>
 export type CallbackType = (input: DictAsset, context: RunnerContext) => Promise<DictAsset>
 
 /**
@@ -113,39 +108,6 @@ async function readTaskInput(taskId: string, client: GraphQLClient): Promise<Dic
     console.error(`Error reading task input for ${taskId}:`, error)
     return null
   }
-}
-
-/**
- * Read task creator from graphql server
- */
-async function readTaskCreator(taskId: TraceId, client: GraphQLClient): Promise<Creator | null> {
-  try {
-    const task = await client.getTask(taskId)
-    if (task && 'creator' in task) {
-      return task.creator as Creator
-    }
-  }
-  catch (error) {
-    console.error(`Error reading task creator for ${taskId}:`, error)
-  }
-  return null
-}
-
-/**
- * Compute task creator string representation
- */
-async function computeTaskCreatorStr(taskId: TraceId, client: GraphQLClient): Promise<string | null> {
-  const creator = await readTaskCreator(taskId, client)
-  if (creator === null) {
-    return null
-  }
-  if (isLink(creator)) {
-    return creator.toString()
-  }
-  if (typeof creator === 'string') {
-    return `"${creator}"` // escape by double quoting
-  }
-  return await store(creator)
 }
 
 /**
@@ -234,9 +196,6 @@ export async function handleNewTask(
   const taskId = taskInfo.taskId
   let resolver: (() => void) | null = null
 
-  const getCreator = async () => await readTaskCreator(taskId, client)
-  const getCreatorId = async () => await computeTaskCreatorStr(taskId, client)
-
   // Get a slot in the task pool
   await pendingTaskpool.waitTillAvailable()
   resolver = pendingTaskpool.addNewResolver(taskId)
@@ -298,7 +257,7 @@ export async function handleNewTask(
       console.info(`Input data:`, inputAsset)
       outputAsset = await execute(
         inputAsset,
-        { taskId, update: updateCallback, getCreator, getCreatorId },
+        { taskId, update: updateCallback },
       )
       console.info(`Task ${taskId} execution completed with output:`, outputAsset)
     }
@@ -686,9 +645,6 @@ export async function mandatoryTaskRunner(
       throw new Error('input asset not valid')
     }
 
-    const getCreator = async () => await readTaskCreator(taskId, client)
-    const getCreatorId = async () => await computeTaskCreatorStr(taskId, client)
-
     // Try to claim the task
     if (forceReclaim) {
       console.info(`Force reclaim requested for task ${taskId}`)
@@ -747,8 +703,6 @@ export async function mandatoryTaskRunner(
       outputAsset = await execute(inputAsset, {
         taskId,
         update: updateCallback,
-        getCreator,
-        getCreatorId,
       })
     }
     catch (err) {

@@ -1615,9 +1615,7 @@ export class PipelineGraphQLClient {
     accumulatorData: DictAsset,
   ): Promise<boolean> {
     try {
-      // Convert DictAsset to encoded string for GraphQL transport
-      const jsonData = encodeToString(accumulatorData)
-
+      // Pass DictAsset directly — the DictJSONAsset scalar handles serialization
       const response = await this.client.mutate({
         mutation: SET_MERGE_ACCUMULATOR,
         variables: {
@@ -1625,7 +1623,7 @@ export class PipelineGraphQLClient {
           workflowRevisionId,
           contextAssetHash,
           nodeId,
-          accumulatorData: jsonData,
+          accumulatorData: accumulatorData,
         },
       })
 
@@ -1655,12 +1653,7 @@ export class PipelineGraphQLClient {
     value: AssetValue,
   ): Promise<DictAsset | null> {
     try {
-      // Convert AssetValue to JSONAsset for GraphQL transport
-      const jsonValue = encodeToString(value)
-
-      // Note: jsonValue can be any JSON type (null, boolean, number, string, array, object)
-      // since it's the value for a specific key in the accumulator dict
-
+      // Pass AssetValue directly — the JSONAsset scalar handles serialization
       const response = await this.client.mutate({
         mutation: MERGE_MERGE_ACCUMULATOR,
         variables: {
@@ -1669,7 +1662,7 @@ export class PipelineGraphQLClient {
           contextAssetHash,
           nodeId,
           key,
-          value: jsonValue,
+          value: value,
         },
       })
 
@@ -1678,9 +1671,8 @@ export class PipelineGraphQLClient {
         return null
       }
 
-      // Convert encoded string back to DictAsset
-      // The result is always a dict (the full accumulator state)
-      return decodeFromString(JSON.stringify(result)) as DictAsset
+      // Result is already a DictAsset from the GraphQL scalar
+      return result as DictAsset
     }
     catch (error) {
       console.error('Error merging merge accumulator:', error)
@@ -1743,8 +1735,8 @@ export class PipelineGraphQLClient {
         return null
       }
 
-      // Convert encoded string back to DictAsset
-      return decodeFromString(JSON.stringify(result)) as DictAsset
+      // Result is already a DictAsset from the GraphQL scalar
+      return result as DictAsset
     }
     catch (error) {
       console.error('Error getting merge accumulator:', error)

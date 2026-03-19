@@ -8,7 +8,6 @@ import {
   type AssetValue,
   type DictAsset,
 } from '../index.js'
-import type { Action } from '../types/legacy.js'
 import type { UserActionId } from '../types/playtiss.js'
 
 // keep format consistent to NodeOutputRef
@@ -63,7 +62,12 @@ export interface Edge extends DictAsset {
   target: EdgeTargetSlot
 }
 
-export interface Pipeline extends Action {
+export interface Pipeline extends DictAsset {
+  asset_type: 'action'
+  timestamp: number
+  description: string
+  input_shape: AssetValue
+  output_shape: AssetValue
   nodes: Record<AssetId, Node>
   edges: Record<AssetId, Edge>
 }
