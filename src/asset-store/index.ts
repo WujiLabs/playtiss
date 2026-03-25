@@ -5,11 +5,11 @@ import * as dagJSON from '@ipld/dag-json'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
 import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '../index.js'
-import { computeTopBlock } from './compute_hash.js'
+import { cidToAssetId, computeTopBlock } from './compute_hash.js'
 import { fetchBuffer, hasBuffer, saveBuffer } from './storage-factory.js'
 
 function collectCIDLinks(value: unknown): AssetId[] {
-  if (value instanceof CID) return [value.toString() as AssetId]
+  if (value instanceof CID) return [cidToAssetId(value)]
   if (value instanceof Uint8Array) return []
   if (Array.isArray(value)) return value.flatMap(v => collectCIDLinks(v))
   if (value !== null && typeof value === 'object') {
@@ -30,10 +30,10 @@ function collectCIDLinks(value: unknown): AssetId[] {
  * generated sub-object CIDs.
  */
 export async function store(input: AssetValue): Promise<AssetId> {
-  if (input instanceof CID) return input.toString() as AssetId
+  if (input instanceof CID) return cidToAssetId(input)
   // CID is computed via Merkle hash (stable whether sub-values are inline or linked)
   const { cid } = await computeTopBlock(input)
-  const id = cid.toString() as AssetId
+  const id = cidToAssetId(cid)
   if (!(await hasBuffer(id))) {
     // Store the original value as-is (not Merkle-ized), so load() returns the full object
     const bytes = input instanceof Uint8Array
@@ -58,7 +58,7 @@ export async function load(id: AssetId): Promise<AssetValue> {
  */
 export async function resolve(value: AssetValue): Promise<AssetValue> {
   if (value instanceof CID) {
-    const loaded = await load(value.toString() as AssetId)
+    const loaded = await load(cidToAssetId(value))
     return resolve(loaded)
   }
   if (value instanceof Uint8Array || value === null || typeof value !== 'object') return value
@@ -88,5 +88,5 @@ export {
   setS3WebStorageProvider,
 } from './storage-factory.js'
 
-export { computeHash } from './compute_hash.js'
+export { cidToAssetId, computeHash } from './compute_hash.js'
 export type { AwsCredentials, BridgeConfig, S3Config } from './config.js'

@@ -9,36 +9,33 @@ import {
   type AssetValue,
   type DictAsset,
   type SystemActionId,
-  type ValueOrLink,
 } from 'playtiss'
 import { computeHash, load, store } from 'playtiss/asset-store'
-import { type Node, type Pipeline, isConstNode } from 'playtiss/pipeline'
+import { type Edge, type Node, isConstNode } from 'playtiss/pipeline'
 import {
   type NodeSlotInfo,
   type PipelineInfo,
   parsePipeline,
 } from 'playtiss/pipeline/parser'
-import promise_map from 'playtiss/utils/promise_map'
-import { taskCreationPromiseMap } from '../utils/promise-map-limited.js'
-// import { requestElevatedActionToken } from "../graphql/action.js";
+import pLimit from 'p-limit'
 import { LRUCache } from 'lru-cache'
 import { type TraceId, isTraceId } from 'playtiss/types/trace_id'
-import type { PendingTask, Task } from '../graphql/types.js'
-import { getLimiter } from '../utils/concurrency-limiter.js'
+import type { Task } from '../graphql/types.js'
+import { getLimiter, withLimit } from '../utils/concurrency-limiter.js'
 import {
+  type MetaValues,
   type V12Context,
   type V12WorkflowExecutionContext,
-  createPendingTaskRecord,
+  createPartialTaskInputs,
   createTaskRecord,
-  deletePendingTask,
+  deletePartialTaskInputs,
   getContextAssetHash,
-  getPendingTaskInputs,
+  getPartialTaskInputs,
   getSharedGraphQLClient,
   getTaskInputs,
   getTaskRecords,
   getWorkflowTaskIdFromRevisionId,
-  updateAndRetrieveTaskMergeAsset,
-  updateTaskStatus,
+  updatePartialTaskInputs,
 } from './model.js'
 
 // ================================================================
@@ -64,7 +61,7 @@ type TaskOutcome = 'deliver' | 'abort' | 'update'
  * Cache for V12Context asset loading to avoid redundant S3 load() calls
  *
  * Context asset content is immutable - same assetId always produces same value
- * This cache is critical for onTaskDelivered() performance with high concurrency
+ * This cache is critical for handleTaskCompletion() performance with high concurrency
  *
  * Typical case: Most workflows use the same few context values (often {})
  * With 20 parallel workflow records, without cache = 20 concurrent S3 loads for same context
@@ -79,7 +76,7 @@ const contextValueCache = new LRUCache<string, Promise<V12Context>>({
 /**
  * Limiter-aware load wrapper for V12Context (AssetId) with caching
  *
- * When onTaskDelivered() processes 20 workflow records in parallel,
+ * When handleTaskCompletion() processes 20 workflow records in parallel,
  * without this cache/limiter we'd have 20 concurrent uncached S3 load() calls
  *
  * @param contextAssetId - V12Context AssetId string
@@ -215,7 +212,7 @@ async function reportTaskOutcome(
   }
 }
 
-function isPipelineOutput(
+function isOutputNode(
   node: AssetId | null,
 ): node is null {
   return node === null
@@ -261,15 +258,11 @@ async function createNodeTask(
   const inputsAssetId = await limiter(async () => store(asset))
 
   // Apply task-creation limiter here at the leaf operation level
-  return await taskCreationPromiseMap(
-    [null], // dummy item to satisfy promise_map_limited
-    async () => {
-      const task = await createTaskOptimized(actionId, asset)
-      await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH')
-      return task
-    },
-    { concurrency: 1 },
-  ).then(results => results[0])
+  return await withLimit(async () => {
+    const task = await createTaskOptimized(actionId, asset)
+    await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH')
+    return task
+  }, 'task-creation')
 }
 
 /**
@@ -288,16 +281,25 @@ async function processNodeReady(
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   node: AssetId,
-  asset: DictAsset,
+  combinedAsset: DictAsset, // contains both data keys and ^meta keys
 ): Promise<Task | null> {
   const actionId = pipelineInfo.nodes[node].action
   if (!isTraceId(actionId)) {
     throw new Error(`built in action ${actionId} is not separate task`)
   }
 
-  // Store inputs as asset (inputs hash = asset ID)
+  // Separate data from meta — only data slots go into input hash
+  const asset = stripMetaKeys(combinedAsset)
+  const metaAsset = extractMetaKeys(combinedAsset)
+
+  // Store inputs as asset (inputs hash = asset ID) — meta keys excluded
   const limiter = getLimiter('s3-store')
   const inputsAssetId = await limiter(async () => store(asset))
+
+  // Store meta asset if non-empty
+  const metaAssetHash = Object.keys(metaAsset).length > 0
+    ? await limiter(async () => store(metaAsset))
+    : null
 
   const contextAssetHash = await getContextAssetHash(context)
   const graphqlClient = getSharedGraphQLClient()
@@ -324,15 +326,11 @@ async function processNodeReady(
   if (!existingNodeState || !existingNodeState.requiredTaskId) {
     console.log(`🆕 First run detected for node ${node}, creating task immediately`)
 
-    return await taskCreationPromiseMap(
-      [null], // dummy item to satisfy promise_map_limited
-      async () => {
-        const task = await createTaskOptimized(actionId, asset)
-        await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH')
-        return task
-      },
-      { concurrency: 1 },
-    ).then(results => results[0])
+    return await withLimit(async () => {
+      const task = await createTaskOptimized(actionId, asset)
+      await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH', metaAssetHash)
+      return task
+    }, 'task-creation')
   }
 
   // Case 2: Node exists with same inputs → Skip (idempotent)
@@ -348,24 +346,20 @@ async function processNodeReady(
     // THROUGHPUT MODE: Auto-create task and schedule immediately
     console.log(`⚡ Auto-propagate ENABLED: creating task for stale node ${node}`)
 
-    return await taskCreationPromiseMap(
-      [null],
-      async () => {
-        // Create task (GraphQL mutation automatically schedules it as PENDING)
-        const task = await createTaskOptimized(actionId, asset)
+    return await withLimit(async () => {
+      // Create task (GraphQL mutation automatically schedules it as PENDING)
+      const task = await createTaskOptimized(actionId, asset)
 
-        // createTaskRecord will:
-        // - Set dependencyStatus = "FRESH" (we're processing the input change)
-        // - Check TaskExecutionState.runtimeStatus (PENDING) → map to RUNNING
-        // - Set requiredTaskId = task.id
-        // - Set lastInputsHash = inputsAssetId
-        await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH')
+      // createTaskRecord will:
+      // - Set dependencyStatus = "FRESH" (we're processing the input change)
+      // - Check TaskExecutionState.runtimeStatus (PENDING) → map to RUNNING
+      // - Set requiredTaskId = task.id
+      // - Set lastInputsHash = inputsAssetId
+      await createTaskRecord(pipeline, context, node, task, workflowContext, inputsAssetId, 'FRESH', metaAssetHash)
 
-        console.log(`✅ Auto-created task ${task.id} for stale node ${node}`)
-        return task
-      },
-      { concurrency: 1 },
-    ).then(results => results[0])
+      console.log(`✅ Auto-created task ${task.id} for stale node ${node}`)
+      return task
+    }, 'task-creation')
   }
   else {
     // INTERACTIVE MODE (Default): Mark STALE/IDLE, wait for user
@@ -392,14 +386,34 @@ async function processNodeReady(
   }
 }
 
-function isTagSlot(name: string): name is `%${string}` {
+function isContextSlot(name: string): name is `%${string}` {
   return name.startsWith('%')
+}
+
+function isMetaSlot(name: string): name is `^${string}` {
+  return name.startsWith('^')
+}
+
+function stripMetaKeys(asset: DictAsset): DictAsset {
+  const result: DictAsset = {}
+  for (const [key, value] of Object.entries(asset)) {
+    if (!key.startsWith('^')) result[key] = value
+  }
+  return result
+}
+
+function extractMetaKeys(asset: DictAsset): MetaValues {
+  const result: MetaValues = {}
+  for (const [key, value] of Object.entries(asset)) {
+    if (isMetaSlot(key)) result[key] = value
+  }
+  return result
 }
 
 // TODO: remove this once we migrate to v12
 const taskMergeAction: SystemActionId = 'core:orchestrator.task_merge'
 
-async function accessDictAsset(
+async function resolveNestedValue(
   asset: DictAsset,
   key: string,
 ): Promise<AssetValue> {
@@ -424,6 +438,92 @@ async function accessDictAsset(
   }
   return retAsset
 }
+
+// ================================================================
+// Edge Resolution: extract context + asset from edge lists
+// ================================================================
+
+/**
+ * Resolve tag edges into a context object.
+ */
+async function resolveContextEdges(
+  tagEdges: Edge[],
+  currentContext: V12Context,
+  currentAsset: DictAsset,
+): Promise<V12Context> {
+  const nextContext: V12Context = {}
+  for (const { source, target } of tagEdges) {
+    const value = isContextSlot(source.name)
+      ? currentContext[source.name]
+      : isMetaSlot(source.name)
+        ? currentAsset[source.name]
+        : await resolveNestedValue(currentAsset, source.name)
+    if (value !== undefined) {
+      nextContext[target.name as `%${string}`] = value
+    }
+    else {
+      console.warn(`property ${source.name} does not exist!`)
+    }
+  }
+  return nextContext
+}
+
+/**
+ * Resolve slot edges into an asset, merging into an existing base asset.
+ */
+async function resolveDataEdges(
+  slotEdges: Edge[],
+  currentContext: V12Context,
+  currentAsset: DictAsset,
+  baseAsset: DictAsset,
+): Promise<DictAsset> {
+  const nextAsset: DictAsset = { ...baseAsset }
+  for (const { source, target } of slotEdges) {
+    const value = isContextSlot(source.name)
+      ? currentContext[source.name]
+      : isMetaSlot(source.name)
+        ? currentAsset[source.name]
+        : await resolveNestedValue(currentAsset, source.name)
+    if (value !== undefined) {
+      nextAsset[target.name] = value
+    }
+    else {
+      console.warn(`property ${source.name} does not exist!`)
+    }
+  }
+  return nextAsset
+}
+
+/**
+ * Resolve meta edges into an asset dict with ^-prefixed keys.
+ * Meta values ride alongside data values in the same dict but are stripped before task input hashing.
+ */
+async function resolveMetaEdges(
+  metaEdges: Edge[],
+  currentContext: V12Context,
+  currentAsset: DictAsset,
+  baseAsset: DictAsset,
+): Promise<DictAsset> {
+  const result: DictAsset = { ...baseAsset }
+  for (const { source, target } of metaEdges) {
+    const value = isContextSlot(source.name)
+      ? currentContext[source.name]
+      : isMetaSlot(source.name)
+        ? currentAsset[source.name]
+        : await resolveNestedValue(currentAsset, source.name)
+    if (value !== undefined) {
+      result[target.name] = value
+    }
+    else {
+      console.warn(`property ${source.name} does not exist!`)
+    }
+  }
+  return result
+}
+
+// ================================================================
+// Critical zone lock for merge nodes
+// ================================================================
 
 /**
  * Critical zone lock for merge nodes to prevent race conditions.
@@ -450,339 +550,197 @@ const criticalZoneLock = new Map<
   Map<AssetId, Promise<void>>
 >()
 
-async function processNodeSlotInfo(
+async function acquireMergeNodeLock(
+  revisionId: TraceId,
+  nodeId: AssetId,
+  promise: Promise<void>,
+): Promise<void> {
+  let revisionLocks = criticalZoneLock.get(revisionId)
+  if (!revisionLocks) {
+    revisionLocks = new Map<AssetId, Promise<void>>()
+    criticalZoneLock.set(revisionId, revisionLocks)
+  }
+  const existingLock = revisionLocks.get(nodeId)
+  revisionLocks.set(nodeId, promise)
+  if (existingLock) {
+    await existingLock
+  }
+}
+
+// ================================================================
+// Node-type handler strategies
+// ================================================================
+
+type PropagateResult = Task | Task[] | null
+
+interface NodeHandlerArgs {
+  pipeline: AssetId
+  pipelineInfo: PipelineInfo
+  workflowContext: V12WorkflowExecutionContext
+  nextNode: AssetId | null
+  nextNodeSlots: string[]
+  nextMetaSlots: string[]
+  nextContext: V12Context
+  nextAsset: DictAsset // contains both data keys and ^meta keys
+}
+
+async function handleRegularNode(args: NodeHandlerArgs): Promise<PropagateResult> {
+  const { pipeline, pipelineInfo, workflowContext, nextNode, nextContext, nextAsset } = args
+  if (isOutputNode(nextNode)) {
+    await reportPipelineTaskOutcome(nextContext, workflowContext, stripMetaKeys(nextAsset), 'deliver')
+    return null
+  }
+  return await processNodeReady(pipeline, pipelineInfo, nextContext, workflowContext, nextNode, nextAsset)
+}
+
+async function handleMergeNode(args: NodeHandlerArgs): Promise<PropagateResult> {
+  const { pipeline, pipelineInfo, workflowContext, nextNode, nextNodeSlots, nextMetaSlots, nextContext, nextAsset } = args
+  // If all inputs are ready (data slots AND meta slots)
+  const allReady = nextNodeSlots.every(name => name in nextAsset)
+    && nextMetaSlots.every(name => name in nextAsset)
+  if (allReady) {
+    await deletePartialTaskInputs(pipeline, nextContext, nextNode, workflowContext)
+    if (isOutputNode(nextNode)) {
+      await reportPipelineTaskOutcome(nextContext, workflowContext, stripMetaKeys(nextAsset), 'deliver')
+      return null
+    }
+    return await processNodeReady(pipeline, pipelineInfo, nextContext, workflowContext, nextNode, nextAsset)
+  }
+  // Not all inputs ready — persist partial state and wait
+  await createPartialTaskInputs(pipeline, nextContext, nextNode, nextAsset, workflowContext)
+  return null
+}
+
+async function handleTaskSplitNode(args: NodeHandlerArgs): Promise<PropagateResult> {
+  const { pipeline, pipelineInfo, workflowContext, nextNode, nextContext, nextAsset } = args
+  if (isOutputNode(nextNode)) {
+    throw new Error('Output node cannot have builtin action')
+  }
+  return fanOutSplit(pipeline, pipelineInfo, nextContext, workflowContext, nextAsset, nextNode)
+}
+
+async function handleTaskMergeNode(args: NodeHandlerArgs): Promise<PropagateResult> {
+  const { pipeline, pipelineInfo, workflowContext, nextNode, nextContext, nextAsset } = args
+  if (isOutputNode(nextNode)) {
+    throw new Error('Output node cannot have builtin action')
+  }
+  const keys = nextAsset.keys
+  if (typeof keys === 'number') {
+    // Array merge
+    const tmpAsset = await updatePartialTaskInputs(
+      pipeline, nextContext, nextNode, (nextAsset.key as number).toFixed(0), nextAsset.item, workflowContext,
+    )
+    if (Object.keys(tmpAsset).length === keys) {
+      const outputAsset = Array.from({ length: keys }, (_, i) => tmpAsset[i.toFixed(0)])
+      return forwardMergeOutput(pipeline, pipelineInfo, nextContext, workflowContext, { output: outputAsset }, nextNode)
+    }
+    // Not all inputs ready — accumulator updated atomically, wait for remaining
+    return null
+  }
+  if (Array.isArray(keys)) {
+    // Object merge
+    const tmpAsset = await updatePartialTaskInputs(
+      pipeline, nextContext, nextNode, nextAsset.key as string, nextAsset.item, workflowContext,
+    )
+    if (keys.every(key => typeof key === 'string' && key in tmpAsset)) {
+      const outputAsset = tmpAsset
+      return forwardMergeOutput(pipeline, pipelineInfo, nextContext, workflowContext, { output: outputAsset }, nextNode)
+    }
+    // Not all inputs ready — accumulator updated atomically, wait for remaining
+    return null
+  }
+  throw new Error('Invalid keys type')
+}
+
+async function handleConstNode(args: NodeHandlerArgs): Promise<PropagateResult> {
+  const { pipeline, pipelineInfo, workflowContext, nextNode, nextContext } = args
+  if (isOutputNode(nextNode)) {
+    throw new Error('Output node cannot be a const node')
+  }
+  const nodeData = pipelineInfo.nodes[nextNode!]
+  if (!isConstNode(nodeData)) {
+    throw new Error(`Node ${nextNode} is marked as const but missing value property`)
+  }
+  const constOutput: DictAsset = { output: nodeData.value }
+  const constResults: PropagateResult[] = []
+  for (const nodeSlotInfo of pipelineInfo.node_nexts[nextNode!]) {
+    constResults.push(
+      await propagateToNode(
+        pipeline, pipelineInfo, nextContext, workflowContext, constOutput, nodeSlotInfo,
+      ),
+    )
+  }
+  return flattenTasks(constResults)
+}
+
+/** Strategy map: dispatch by node type */
+const nodeHandlers: Record<string, (args: NodeHandlerArgs) => Promise<PropagateResult>> = {
+  regular: handleRegularNode,
+  merge: handleMergeNode,
+  task_split: handleTaskSplitNode,
+  task_merge: handleTaskMergeNode,
+  const: handleConstNode,
+}
+
+// ================================================================
+// Core dispatch: propagate data to a downstream node
+// ================================================================
+
+async function propagateToNode(
   pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   currentAsset: DictAsset,
-  { node: nextNodeId, tag_edges, slot_edges }: NodeSlotInfo,
-): Promise<Task | PendingTask | (Task | PendingTask)[] | null> {
+  { node: nextNodeId, context_edges, data_edges, meta_edges }: NodeSlotInfo,
+): Promise<PropagateResult> {
   // Create a promise to signal when this call's critical zone completes
-  // This will be used by other concurrent calls to wait their turn
-  // Only needed for merge nodes (nextNodeId !== null) to prevent race conditions
-  //
-  // Assumption: merge nodes do not trigger recursive calls to processNodeSlotInfo
-  // (i.e., processing a merge node doesn't cause the same merge node to be processed again)
   const { promise, resolve, reject } = Promise.withResolvers<void>()
   try {
-    const nextNode
-      = nextNodeId === null
-        ? null
-        : nextNodeId as AssetId
-    const nextNodeType
-      = nextNodeId === null
-        ? pipelineInfo.output_type
-        : pipelineInfo.node_types[nextNodeId]
-    const nextNodeSlots
-      = nextNodeId === null
-        ? pipelineInfo.output_slots
-        : pipelineInfo.node_slots[nextNodeId]
+    const nextNode = nextNodeId === null ? null : nextNodeId as AssetId
+    const nextNodeType = nextNodeId === null
+      ? pipelineInfo.output_type
+      : pipelineInfo.node_types[nextNodeId]
+    const nextNodeSlots = nextNodeId === null
+      ? pipelineInfo.output_slots
+      : pipelineInfo.node_slots[nextNodeId]
+    const nextMetaSlots = nextNodeId === null
+      ? []
+      : pipelineInfo.node_meta_slots[nextNodeId] || []
 
-    // prepare nextContext
-    const nextContext: V12Context = {}
-    await promise_map(
-      tag_edges,
-      async ({ source, target }) => {
-        const sourceName = source.name
-        const targetName = target.name as `%${string}` // tag_edges contains only tag targets
-        // read source from context or asset
-        const value = isTagSlot(sourceName)
-          ? currentContext[sourceName]
-          : await accessDictAsset(currentAsset, sourceName)
-        // set value to nextContext
-        if (value !== undefined) {
-          nextContext[targetName] = value
-        }
-        else {
-          console.warn(`property ${sourceName} does not exist!`)
-        }
-      },
-      { concurrency: 1 },
-    )
+    // Step 1: Resolve context from tag edges (needed for merge state lookup)
+    const nextContext = await resolveContextEdges(context_edges, currentContext, currentAsset)
 
-    // prepare nextAsset
-    let nextAsset: DictAsset = {}
+    // Step 2: For merge nodes, acquire lock and load existing state
+    let baseAsset: DictAsset = {}
     if (nextNodeType === 'merge') {
-      // === CRITICAL ZONE FOR MERGE NODES ===
-      // Acquire lock to prevent concurrent access to merge node state within same workflow revision
-      //
-      const revisionId = workflowContext.workflowRevisionId
-
-      // 1. Get or create the lock map for this workflow revision
-      let revisionLocks = criticalZoneLock.get(revisionId)
-      if (!revisionLocks) {
-        revisionLocks = new Map<AssetId, Promise<void>>()
-        criticalZoneLock.set(revisionId, revisionLocks)
-      }
-
-      // 2. Check if another call in THIS revision is already processing this merge node
-      const lock = revisionLocks.get(nextNodeId!)
-      // 3. Register our promise so future calls in this revision will wait for us
-      revisionLocks.set(nextNodeId!, promise)
-      // 4. If there was a previous call, wait for it to complete first
-      if (lock) {
-        await lock
-      }
-      // 5. Now we have exclusive access for this revision - read the current merge state
-      // obtain inputs on record (either pending or completed task)
+      await acquireMergeNodeLock(workflowContext.workflowRevisionId, nextNodeId!, promise)
       // Spread to create mutable copy (IPLD dag-json returns frozen objects)
-      nextAsset = {
-        ...(await getPendingTaskInputs(
-          pipeline,
-          nextContext,
-          nextNode,
-          workflowContext,
-        ))
-        || (await getTaskInputs(
-          pipeline,
-          nextContext,
-          nextNode,
-          workflowContext,
-        ))
-        || {},
-      }
-      // Note: Lock will be released in finally block when promise resolves
-    }
-    await promise_map(
-      slot_edges,
-      async ({ source, target }) => {
-        const sourceName = source.name
-        const targetName = target.name
-        // read source from context or asset
-        const value = isTagSlot(sourceName)
-          ? currentContext[sourceName]
-          : await accessDictAsset(currentAsset, sourceName)
-        // set value to asset
-        if (value !== undefined) {
-          nextAsset[targetName] = value
-        }
-        else {
-          console.warn(`property ${sourceName} does not exist!`)
-        }
-      },
-      { concurrency: 1 },
-    )
-
-    /// / prepare next task or pending task
-    // regular node: no need to wait on other nodes, directly prepare next task
-    switch (nextNodeType) {
-      case 'regular': {
-        // for pipeline output: deliver pipeline task
-        if (isPipelineOutput(nextNode)) {
-          await reportPipelineTaskOutcome(
-            nextContext,
-            workflowContext,
-            nextAsset,
-            'deliver',
-          )
-          return null
-        }
-        // for next internal node: smart task creation (v14)
-        else {
-          return await processNodeReady(
-            pipeline,
-            pipelineInfo,
-            nextContext,
-            workflowContext,
-            nextNode,
-            nextAsset,
-          )
-        }
-      }
-      // for merge node
-      case 'merge': {
-        // if all inputs are ready
-        if (nextNodeSlots.every(name => name in nextAsset)) {
-          // delete pending task (if any)
-          await deletePendingTask(
-            pipeline,
-            nextContext,
-            nextNode,
-            workflowContext,
-          )
-          // for pipeline output: deliver pipeline task
-          if (isPipelineOutput(nextNode)) {
-            await reportPipelineTaskOutcome(
-              nextContext,
-              workflowContext,
-              nextAsset,
-              'deliver',
-            )
-            return null
-          }
-          // for next internal node: smart task creation (v14)
-          else {
-            return await processNodeReady(
-              pipeline,
-              pipelineInfo,
-              nextContext,
-              workflowContext,
-              nextNode,
-              nextAsset,
-            )
-          }
-        }
-        // if not all inputs are ready, create new pending task
-        else {
-          const action = isPipelineOutput(nextNode)
-            ? (workflowContext.workflowRevisionId as ActionId) // TODO: FIX THIS
-            : pipelineInfo.nodes[nextNode!].action
-          if (!isTraceId(action)) {
-            throw new Error(
-              `built in action ${action} does not accept inputs from multiple nodes`,
-            )
-          }
-          const pending_task: PendingTask = {
-            asset_type: 'pending_task',
-            action,
-            input: nextAsset,
-            creator: 'workflow-engine',
-            timestamp: 0,
-          }
-
-          await createPendingTaskRecord(
-            pipeline,
-            nextContext,
-            nextNode,
-            nextAsset,
-            workflowContext,
-          )
-          return pending_task
-        }
-      }
-      case 'task_split': {
-        if (isPipelineOutput(nextNode)) {
-          throw new Error('Output node cannot have builtin action')
-        }
-        return splitTask(
-          pipeline,
-          pipelineInfo,
-          nextContext,
-          workflowContext,
-          nextAsset,
-          nextNode,
-        )
-      }
-      case 'task_merge': {
-        if (isPipelineOutput(nextNode)) {
-          throw new Error('Output node cannot have builtin action')
-        }
-        const keys = nextAsset.keys
-        if (typeof keys === 'number') {
-          // Array
-
-          const tmpAsset = await updateAndRetrieveTaskMergeAsset(
-            pipeline,
-            nextContext,
-            nextNode,
-            (nextAsset.key as number).toFixed(0),
-            nextAsset.item,
-            workflowContext,
-          )
-
-          if (Object.keys(tmpAsset).length === keys) {
-            const outputAsset = Array.from(
-              { length: keys },
-              (_, i) => tmpAsset[i.toFixed(0)],
-            )
-            return deliverMergeTask(
-              pipeline,
-              pipelineInfo,
-              nextContext,
-              workflowContext,
-              { output: outputAsset },
-              nextNode,
-            )
-          }
-          // if not all inputs are ready, return new pending task
-          else {
-            const pending_task: PendingTask = {
-              asset_type: 'pending_task',
-              action: taskMergeAction,
-              input: tmpAsset,
-              creator: 'workflow-engine',
-              timestamp: 0,
-            }
-            // DO NOT create record since tmpAsset is updated atomically before retrieval
-            // await createPendingTaskRecord(nextContext, nextNode, pending_task);
-            return pending_task
-          }
-        }
-        if (Array.isArray(keys)) {
-          // Object
-          const tmpAsset = await updateAndRetrieveTaskMergeAsset(
-            pipeline,
-            nextContext,
-            nextNode,
-            nextAsset.key as string,
-            nextAsset.item,
-            workflowContext,
-          )
-
-          if (keys.every(key => typeof key === 'string' && key in tmpAsset)) {
-            const outputAsset = tmpAsset
-            return deliverMergeTask(
-              pipeline,
-              pipelineInfo,
-              nextContext,
-              workflowContext,
-              { output: outputAsset },
-              nextNode,
-            )
-          }
-          // if not all inputs are ready, return new pending task
-          else {
-            const pending_task: PendingTask = {
-              asset_type: 'pending_task',
-              action: taskMergeAction,
-              input: tmpAsset,
-              creator: 'workflow-engine',
-              timestamp: 0,
-            }
-            // DO NOT create record since tmpAsset is updated atomically before retrieval
-            // await createPendingTaskRecord(nextContext, nextNode, pending_task);
-            return pending_task
-          }
-        }
-        throw new Error('Invalid keys type')
-      }
-      case 'const': {
-        // Const nodes output their value directly without task execution
-        if (isPipelineOutput(nextNode)) {
-          throw new Error('Output node cannot be a const node')
-        }
-        // Get the const value from the node definition
-        const nodeData = pipelineInfo.nodes[nextNode!]
-        if (!isConstNode(nodeData)) {
-          throw new Error(`Node ${nextNode} is marked as const but missing value property`)
-        }
-        // Single 'output' slot - downstream accesses via 'output' or 'output.key'
-        const constOutput: DictAsset = { output: nodeData.value }
-
-        // Propagate const value to downstream nodes
-        return flattenTasks(
-          await promise_map(
-            pipelineInfo.node_nexts[nextNode!],
-            async nodeSlotInfo =>
-              processNodeSlotInfo(
-                pipeline,
-                pipelineInfo,
-                nextContext,
-                workflowContext,
-                constOutput,
-                nodeSlotInfo,
-              ),
-            { concurrency: 1 },
-          ),
-        )
+      baseAsset = {
+        ...(await getPartialTaskInputs(pipeline, nextContext, nextNode, workflowContext)
+          || await getTaskInputs(pipeline, nextContext, nextNode, workflowContext)
+          || {}),
       }
     }
+
+    // Step 3: Resolve data from slot edges, merging into base asset
+    const dataAsset = await resolveDataEdges(data_edges, currentContext, currentAsset, baseAsset)
+
+    // Step 4: Resolve meta edges into the same asset (^ keys ride alongside data keys)
+    const nextAsset = await resolveMetaEdges(meta_edges, currentContext, currentAsset, dataAsset)
+
+    // Dispatch to the appropriate handler
+    const handler = nodeHandlers[nextNodeType]
+    if (!handler) {
+      throw new Error(`Unknown node type: ${nextNodeType}`)
+    }
+    return await handler({
+      pipeline, pipelineInfo, workflowContext,
+      nextNode, nextNodeSlots, nextMetaSlots, nextContext, nextAsset,
+    })
   }
   catch (error) {
-    // Reject the promise so any waiting calls are notified of the error
     reject(error)
-    // Re-throw to propagate the error up the call stack
     throw error
   }
   finally {
@@ -791,9 +749,9 @@ async function processNodeSlotInfo(
     //
     // IMPORTANT: We don't remove the entry from revisionLocks or criticalZoneLock
     // By the time we resolve, another async call may have already:
-    // 1. Read our promise from revisionLocks (line 358: const lock = revisionLocks.get(nextNodeId!))
-    // 2. Set their own promise (line 360: revisionLocks.set(nextNodeId!, promise))
-    // 3. Started waiting on our promise (line 362-364: if (lock) await lock)
+    // 1. Read our promise from revisionLocks
+    // 2. Set their own promise
+    // 3. Started waiting on our promise
     //
     // If we deleted the entry here, we'd delete THEIR lock, not ours!
     // The maps are naturally bounded by:
@@ -804,21 +762,21 @@ async function processNodeSlotInfo(
 }
 
 function flattenTasks(
-  tasks: (Task | PendingTask | null | (Task | PendingTask | null)[])[],
-): (Task | PendingTask)[] {
+  tasks: PropagateResult[],
+): Task[] {
   return tasks
     .flat()
-    .filter((item): item is Task | PendingTask => item !== null)
+    .filter((item): item is Task => item !== null)
 }
 
-async function splitTask(
+async function fanOutSplit(
   pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   currentAsset: DictAsset,
   node: AssetId,
-): Promise<(Task | PendingTask)[]> {
+): Promise<Task[]> {
   const input = await ensureDictOrArrayAsset(
     currentAsset['input'],
   )
@@ -826,29 +784,25 @@ async function splitTask(
   if (Array.isArray(input)) {
     const keys = input.length
     console.log(`🔀 Split input is ARRAY with ${keys} items`)
-    return flattenTasks(
-      await promise_map(
-        input,
-        async (item, key) => {
-          return flattenTasks(
-            await promise_map(
-              pipelineInfo.node_nexts[node],
-              async nodeSlotInfo =>
-                processNodeSlotInfo(
-                  pipeline,
-                  pipelineInfo,
-                  currentContext,
-                  workflowContext,
-                  { keys, key, item },
-                  nodeSlotInfo,
-                ),
-              { concurrency: 1 },
-            ),
-          )
-        },
-        { concurrency: 1 },
-      ),
-    )
+    const allItemResults: PropagateResult[] = []
+    for (let key = 0; key < input.length; key++) {
+      const item = input[key]
+      const nodeResults: PropagateResult[] = []
+      for (const nodeSlotInfo of pipelineInfo.node_nexts[node]) {
+        nodeResults.push(
+          await propagateToNode(
+            pipeline,
+            pipelineInfo,
+            currentContext,
+            workflowContext,
+            { keys, key, item },
+            nodeSlotInfo,
+          ),
+        )
+      }
+      allItemResults.push(flattenTasks(nodeResults))
+    }
+    return flattenTasks(allItemResults)
   }
   else {
     const keys = Object.keys(input)
@@ -856,86 +810,81 @@ async function splitTask(
     console.log(`🔀 Split input is OBJECT with ${keys.length} keys`)
 
     try {
-      const promiseMapResult = await promise_map(
-        entries,
-        async ([key, item], entryIndex) => {
-          try {
-            const nodeResults = await promise_map(
-              pipelineInfo.node_nexts[node],
-              async (nodeSlotInfo, index) => {
-                try {
-                  return await processNodeSlotInfo(
-                    pipeline,
-                    pipelineInfo,
-                    currentContext,
-                    workflowContext,
-                    { keys, key, item },
-                    nodeSlotInfo,
-                  )
-                }
-                catch (error) {
-                  console.error(
-                    `❌ ERROR in processNodeSlotInfo for key ${key}, node ${index + 1}:`,
-                    error,
-                  )
-                  throw error
-                }
-              },
-              { concurrency: 1 },
-            )
-
-            return flattenTasks(nodeResults)
+      const allEntryResults: Task[][] = []
+      for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+        const [key, item] = entries[entryIndex]
+        try {
+          const nodeResults: PropagateResult[] = []
+          const nextNodes = pipelineInfo.node_nexts[node]
+          for (let index = 0; index < nextNodes.length; index++) {
+            try {
+              nodeResults.push(
+                await propagateToNode(
+                  pipeline,
+                  pipelineInfo,
+                  currentContext,
+                  workflowContext,
+                  { keys, key, item },
+                  nextNodes[index],
+                ),
+              )
+            }
+            catch (error) {
+              console.error(
+                `❌ ERROR in propagateToNode for key ${key}, node ${index + 1}:`,
+                error,
+              )
+              throw error
+            }
           }
-          catch (error) {
-            console.error(
-              `❌ ERROR processing key ${key} (entry ${entryIndex + 1}):`,
-              error,
-            )
-            throw error
-          }
-        },
-        { concurrency: 1 },
-      )
-
-      return flattenTasks(promiseMapResult)
+          allEntryResults.push(flattenTasks(nodeResults))
+        }
+        catch (error) {
+          console.error(
+            `❌ ERROR processing key ${key} (entry ${entryIndex + 1}):`,
+            error,
+          )
+          throw error
+        }
+      }
+      return flattenTasks(allEntryResults)
     }
     catch (error) {
-      console.error(`❌ FATAL ERROR in splitTask promise_map:`, error)
+      console.error(`❌ FATAL ERROR in fanOutSplit:`, error)
       console.error(`❌ Error stack:`, (error as Error).stack)
       throw error
     }
   }
 }
 
-async function deliverMergeTask(
+async function forwardMergeOutput(
   pipeline: AssetId,
   pipelineInfo: PipelineInfo,
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   currentAsset: DictAsset,
   node: AssetId,
-): Promise<(Task | PendingTask)[]> {
-  return flattenTasks(
-    await promise_map(
-      pipelineInfo.node_nexts[node],
-      async nodeSlotInfo =>
-        processNodeSlotInfo(
-          pipeline,
-          pipelineInfo,
-          currentContext,
-          workflowContext,
-          currentAsset,
-          nodeSlotInfo,
-        ),
-      { concurrency: 1 },
-    ),
-  )
+): Promise<Task[]> {
+  const results: PropagateResult[] = []
+  for (const nodeSlotInfo of pipelineInfo.node_nexts[node]) {
+    results.push(
+      await propagateToNode(
+        pipeline,
+        pipelineInfo,
+        currentContext,
+        workflowContext,
+        currentAsset,
+        nodeSlotInfo,
+      ),
+    )
+  }
+  return flattenTasks(results)
 }
 
 // on pipeline claimed
 // * pass pipeline inputs to nodes
 // * process const nodes (source nodes with no incoming edges)
-export async function onPipelineClaimed(
+export async function handleWorkflowStart(
   claimEvent: {
     task: Task
     workflowRevisionId: TraceId
@@ -943,7 +892,7 @@ export async function onPipelineClaimed(
   pipeline: AssetId,
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
-): Promise<(Task | PendingTask)[]> {
+): Promise<Task[]> {
   const workflowContext: V12WorkflowExecutionContext = {
     workflowTaskId: claimEvent.task.id,
     workflowRevisionId: claimEvent.workflowRevisionId,
@@ -969,22 +918,23 @@ export async function onPipelineClaimed(
   )
 
   // Collect all initialization results
-  const allResults: (Task | PendingTask)[] = []
+  const allResults: Task[] = []
 
   // 1. Process pipeline input connections
-  const inputResults = await promise_map(
-    pipelineInfo.input_next,
-    async (nodeSlotInfo) => {
-      return await processNodeSlotInfo(
-        pipeline,
-        pipelineInfo,
-        currentContext,
-        workflowContext,
-        input,
-        nodeSlotInfo,
-      )
-    },
-    { concurrency },
+  const inputLimit = pLimit(concurrency)
+  const inputResults = await Promise.all(
+    pipelineInfo.input_next.map(nodeSlotInfo =>
+      inputLimit(() =>
+        propagateToNode(
+          pipeline,
+          pipelineInfo,
+          currentContext,
+          workflowContext,
+          input,
+          nodeSlotInfo,
+        ),
+      ),
+    ),
   )
   allResults.push(...flattenTasks(inputResults))
 
@@ -1020,21 +970,19 @@ export async function onPipelineClaimed(
       console.log(`📋 Const node ${nodeId} feeding ${nextNodes.length} downstream nodes`)
 
       // Process downstream nodes
-      const constResults = await promise_map(
-        nextNodes,
-        async (nodeSlotInfo) => {
-          return await processNodeSlotInfo(
-            pipeline,
-            pipelineInfo,
-            currentContext,
-            workflowContext,
-            constOutput,
-            nodeSlotInfo,
-          )
-        },
-        { concurrency: 1 },
-      )
-      allResults.push(...flattenTasks(constResults))
+      for (const nodeSlotInfo of nextNodes) {
+        const result = await propagateToNode(
+          pipeline,
+          pipelineInfo,
+          currentContext,
+          workflowContext,
+          constOutput,
+          nodeSlotInfo,
+        )
+        if (result !== null) {
+          allResults.push(...(Array.isArray(result) ? result.filter((r): r is Task => r !== null) : [result]))
+        }
+      }
     }
   }
 
@@ -1071,7 +1019,7 @@ async function ensureDictAsset(asset: AssetValue): Promise<DictAsset> {
 }
 
 // on task delivered
-export async function onTaskDelivered(
+export async function handleTaskCompletion(
   deliverEvent: {
     task: Task
     output: AssetValue
@@ -1080,12 +1028,9 @@ export async function onTaskDelivered(
   concurrency: number = 3,
   workerId: string, // Worker ID for workflow task operations
   workflowRevisionId: TraceId, // current workflow revision ID for this orchestrator
-): Promise<(Task | PendingTask)[]> {
+): Promise<Task[]> {
   const { task, output: asset } = deliverEvent
 
-  // TODO: remove task from watch list
-  // update internal status
-  await updateTaskStatus(pipeline, task, 'deliver')
   // compute/fetch pipeline info
   const pipelineInfo: PipelineInfo = await parsePipeline(pipeline)
   // find all context and node for this workflow revision ID (filtered server-side)
@@ -1145,73 +1090,87 @@ export async function onTaskDelivered(
   }
 
   // for each record:
+  const recordLimit = pLimit(20) // Process workflow records in parallel (typical: 19-20 records)
+  const nodeLimit = pLimit(concurrency)
   return flattenTasks(
-    await promise_map(
-      records,
-      async ({
+    await Promise.all(
+      records.map(({
         context,
         node,
-        workflowRevisionId: recordWorkflowRevisionId, // eslint-disable-line @typescript-eslint/no-unused-vars
-      }): Promise<(Task | PendingTask)[]> => {
-        const currentContext = await toValueCachedContext(context)
+      }) =>
+        recordLimit(async (): Promise<Task[]> => {
+          const currentContext = await toValueCachedContext(context)
 
-        // Use the potentially-forked workflowRevisionId instead of the one from record
-        const effectiveWorkflowRevisionId = workflowRevisionId
+          // Use the potentially-forked workflowRevisionId instead of the one from record
+          const effectiveWorkflowRevisionId = workflowRevisionId
 
-        // Find the workflow task ID from the workflow revision ID
-        const workflowTaskId = await getWorkflowTaskIdFromRevisionId(effectiveWorkflowRevisionId)
-        if (!workflowTaskId) {
-          console.error(
-            `❌ Could not find workflow task ID for revision ${effectiveWorkflowRevisionId}`,
+          // Find the workflow task ID from the workflow revision ID
+          const workflowTaskId = await getWorkflowTaskIdFromRevisionId(effectiveWorkflowRevisionId)
+          if (!workflowTaskId) {
+            console.error(
+              `❌ Could not find workflow task ID for revision ${effectiveWorkflowRevisionId}`,
+            )
+            return []
+          }
+
+          // Construct workflow execution context per record
+          const workflowContext: V12WorkflowExecutionContext = {
+            workflowTaskId: workflowTaskId,
+            workflowRevisionId: effectiveWorkflowRevisionId,
+            workerId: workerId,
+          }
+
+          // find corresponding next nodes
+          if (!(node in pipelineInfo.node_nexts)) {
+            console.log(`⚠️  Node ${node} has no next nodes in pipeline`)
+            return []
+          }
+
+          const nextNodes = pipelineInfo.node_nexts[node]
+
+          // Re-attach meta values from WRNS so downstream edges can read ^sources
+          let currentAssetWithMeta = await ensureDictAsset(asset)
+          const nodeState = await getSharedGraphQLClient().getNodeState(
+            effectiveWorkflowRevisionId,
+            node,
+            context,
           )
-          return []
-        }
+          if (nodeState?.metaAssetHash) {
+            const metaValues = await load(nodeState.metaAssetHash as AssetId) as MetaValues
+            currentAssetWithMeta = { ...currentAssetWithMeta, ...metaValues }
+          }
 
-        // Construct workflow execution context per record
-        const workflowContext: V12WorkflowExecutionContext = {
-          workflowTaskId: workflowTaskId,
-          workflowRevisionId: effectiveWorkflowRevisionId,
-          workerId: workerId,
-        }
-
-        // find corresponding next nodes
-        if (!(node in pipelineInfo.node_nexts)) {
-          console.log(`⚠️  Node ${node} has no next nodes in pipeline`)
-          return []
-        }
-
-        const nextNodes = pipelineInfo.node_nexts[node]
-
-        const results = flattenTasks(
-          await promise_map(
-            nextNodes,
-            async nodeSlotInfo =>
-              processNodeSlotInfo(
-                pipeline,
-                pipelineInfo,
-                currentContext,
-                workflowContext,
-                await ensureDictAsset(asset),
-                nodeSlotInfo,
+          const results = flattenTasks(
+            await Promise.all(
+              nextNodes.map(nodeSlotInfo =>
+                nodeLimit(async () =>
+                  propagateToNode(
+                    pipeline,
+                    pipelineInfo,
+                    currentContext,
+                    workflowContext,
+                    currentAssetWithMeta,
+                    nodeSlotInfo,
+                  ),
+                ),
               ),
-            { concurrency },
-          ),
-        )
-
-        if (results.length > 0) {
-          console.log(
-            `📊 onTaskDelivered returned ${results.length} dependent tasks`,
+            ),
           )
-        }
-        return results
-      },
-      { concurrency: 20 }, // Process workflow records in parallel (typical: 19-20 records)
+
+          if (results.length > 0) {
+            console.log(
+              `📊 handleTaskCompletion returned ${results.length} dependent tasks`,
+            )
+          }
+          return results
+        }),
+      ),
     ),
   )
 }
 
 // on task aborted
-export async function onTaskAborted(
+export async function handleTaskFailure(
   {
     task,
     output,
@@ -1230,13 +1189,9 @@ export async function onTaskAborted(
   if (asset && asset.orders) {
     const orderKeys = Object.keys(asset.orders as Record<string, unknown>)
     console.log(
-      `📦 onTaskDelivered received asset with ${orderKeys.length} orders: [${orderKeys.slice(0, 5).join(', ')}${orderKeys.length > 5 ? ', ...' : ''}]`,
+      `📦 handleTaskCompletion received asset with ${orderKeys.length} orders: [${orderKeys.slice(0, 5).join(', ')}${orderKeys.length > 5 ? ', ...' : ''}]`,
     )
   }
-  // TODO: remove task from watch list
-  // update internal status
-  await updateTaskStatus(pipeline, task, 'abort')
-
   // find all context and abort (filtered server-side)
   // TODO: abort other internal subtasks as well?
   const records = await getTaskRecords(pipeline, task, workflowRevisionId)
@@ -1244,42 +1199,43 @@ export async function onTaskAborted(
     console.warn(`❌ No records found for workflow revision ${workflowRevisionId}`)
     return
   }
-  await promise_map(
-    records,
-    async ({ context, node, workflowRevisionId }) => {
-      const currentContext = await toValueCachedContext(context)
+  const abortLimit = pLimit(concurrency)
+  await Promise.all(
+    records.map(({ context, node, workflowRevisionId }) =>
+      abortLimit(async () => {
+        const currentContext = await toValueCachedContext(context)
 
-      // Find the workflow task ID from the workflow revision ID
-      const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
-      if (!workflowTaskId) {
-        console.error(
-          `❌ Could not find workflow task ID for revision ${workflowRevisionId} in onTaskAborted`,
+        // Find the workflow task ID from the workflow revision ID
+        const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
+        if (!workflowTaskId) {
+          console.error(
+            `❌ Could not find workflow task ID for revision ${workflowRevisionId} in handleTaskFailure`,
+          )
+          return
+        }
+
+        // Construct workflow execution context per record
+        const workflowContext: V12WorkflowExecutionContext = {
+          workflowTaskId: workflowTaskId,
+          workflowRevisionId: workflowRevisionId,
+          workerId: workerId,
+        }
+
+        await reportPipelineTaskOutcome(
+          currentContext,
+          workflowContext,
+          {
+            node,
+            ...asset,
+          },
+          'abort',
         )
-        return
-      }
-
-      // Construct workflow execution context per record
-      const workflowContext: V12WorkflowExecutionContext = {
-        workflowTaskId: workflowTaskId,
-        workflowRevisionId: workflowRevisionId,
-        workerId: workerId,
-      }
-
-      await reportPipelineTaskOutcome(
-        currentContext,
-        workflowContext,
-        {
-          node,
-          ...asset,
-        },
-        'abort',
-      )
-    },
-    { concurrency },
+      }),
+    ),
   )
 }
 
-export async function onTaskUpdated(
+export async function handleTaskProgress(
   updateEvent: {
     task: Task
     output: AssetValue
@@ -1291,8 +1247,6 @@ export async function onTaskUpdated(
 ) {
   const { task, output } = updateEvent
   const asset = output !== null ? await ensureDictAsset(output) : null
-  // update internal status
-  await updateTaskStatus(pipeline, task, 'update')
 
   // find all context and update (filtered server-side)
   const records = await getTaskRecords(pipeline, task, workflowRevisionId)
@@ -1301,45 +1255,38 @@ export async function onTaskUpdated(
     return
   }
 
-  await promise_map(
-    records,
-    async ({ context, node, workflowRevisionId }) => {
-      const currentContext = await toValueCachedContext(context)
+  const updateLimit = pLimit(concurrency)
+  await Promise.all(
+    records.map(({ context, node, workflowRevisionId }) =>
+      updateLimit(async () => {
+        const currentContext = await toValueCachedContext(context)
 
-      // Find the workflow task ID from the workflow revision ID
-      const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
-      if (!workflowTaskId) {
-        console.error(
-          `❌ Could not find workflow task ID for revision ${workflowRevisionId} in onTaskUpdated`,
+        // Find the workflow task ID from the workflow revision ID
+        const workflowTaskId = await getWorkflowTaskIdFromRevisionId(workflowRevisionId)
+        if (!workflowTaskId) {
+          console.error(
+            `❌ Could not find workflow task ID for revision ${workflowRevisionId} in handleTaskProgress`,
+          )
+          return
+        }
+
+        // Construct workflow execution context per record
+        const workflowContext: V12WorkflowExecutionContext = {
+          workflowTaskId: workflowTaskId,
+          workflowRevisionId: workflowRevisionId,
+          workerId: workerId,
+        }
+
+        await reportPipelineTaskOutcome(
+          currentContext,
+          workflowContext,
+          {
+            node,
+            ...asset,
+          },
+          'update',
         )
-        return
-      }
-
-      // Construct workflow execution context per record
-      const workflowContext: V12WorkflowExecutionContext = {
-        workflowTaskId: workflowTaskId,
-        workflowRevisionId: workflowRevisionId,
-        workerId: workerId,
-      }
-
-      await reportPipelineTaskOutcome(
-        currentContext,
-        workflowContext,
-        {
-          node,
-          ...asset,
-        },
-        'update',
-      )
-    },
-    { concurrency },
+      }),
+    ),
   )
 }
-
-// on task created
-// TODO: add task to watch list
-// export async function onTaskCreated(
-//   createEvent: Event<"create">,
-//   pipeline: Pipeline,
-// ) {
-// }

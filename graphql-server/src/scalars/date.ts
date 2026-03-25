@@ -1,36 +1,17 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
-import { GraphQLScalarType, Kind } from 'graphql'
+import { GraphQLScalarType } from 'graphql'
+import { GraphQLTimestamp } from 'graphql-scalars'
 
+/**
+ * Date scalar backed by graphql-scalars Timestamp.
+ * Serializes Date objects and numbers to epoch milliseconds (integer).
+ * Parses incoming integers to Date objects.
+ *
+ * We keep the schema name "Date" for API compatibility while delegating
+ * all serialize/parse logic to the well-tested graphql-scalars package.
+ */
 export const DateScalar = new GraphQLScalarType({
+  ...GraphQLTimestamp.toConfig(),
   name: 'Date',
-  description: 'Date custom scalar type',
-  serialize(value) {
-    if (value instanceof Date) {
-      return value.getTime() // Convert outgoing Date to integer for JSON
-    }
-    if (typeof value === 'number') {
-      return value // Pass through timestamp numbers directly
-    }
-    throw Error(
-      'GraphQL Date Scalar serializer expected a `Date` object or `number`',
-    )
-  },
-  parseValue(value) {
-    if (typeof value === 'number') {
-      return new Date(value) // Convert incoming integer to Date
-    }
-    throw new Error('GraphQL Date Scalar parser expected a `number`')
-  },
-  parseLiteral(ast) {
-    if (ast.kind === Kind.INT) {
-      // Convert hard-coded AST string to integer and then to Date
-      return new Date(parseInt(ast.value, 10))
-    }
-    // Invalid hard-coded value (not an integer)
-    return null
-  },
+  description: 'Date as milliseconds since UNIX epoch (backed by graphql-scalars Timestamp)',
 })

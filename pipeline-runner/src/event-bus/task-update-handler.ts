@@ -4,7 +4,7 @@
  *
  * This module handles task completion and failure events by replicating the exact
  * flow from WorkflowOrchestrator.handleSubtaskUpdate():
- *   handleSubtaskUpdate() → handleSubtaskSuccess() → onTaskDelivered() → processNodeSlotInfo()
+ *   handleSubtaskUpdate() → handleSubtaskSuccess() → handleTaskCompletion() → propagateToNode()
  *
  * KEY DIFFERENCE: Instead of being triggered by polling, this is triggered by events.
  *
@@ -27,7 +27,7 @@ import type { Pipeline } from 'playtiss/pipeline'
 import type { UserActionId } from 'playtiss/types/playtiss'
 import type { PipelineGraphQLClient } from '../graphql/pipeline.js'
 import type { Task, workflowRevisionNodeState } from '../graphql/types.js'
-import { onTaskAborted, onTaskDelivered } from '../pipeline/scheduler.js'
+import { handleTaskFailure, handleTaskCompletion } from '../pipeline/scheduler.js'
 import { loadCached } from '../utils/asset-cache.js'
 import type { Event } from './interfaces.js'
 
@@ -41,7 +41,7 @@ import type { Event } from './interfaces.js'
  * 1. Get completed task
  * 2. Load output asset
  * 3. Find all workflow revisions that reference this task
- * 4. For each workflow revision, call onTaskDelivered() (which calls processNodeSlotInfo())
+ * 4. For each workflow revision, call handleTaskCompletion() (which calls propagateToNode())
  *
  * @param event The task_completed event
  * @param graphqlClient GraphQL client for database operations
@@ -140,7 +140,7 @@ export async function handleTaskCompletedEvent(
       `📊 Retrieved ${totalEdges} workflow node states across ${workflowRevisions.size} workflow revision(s)`,
     )
 
-    // Step 6: For each workflow revision, call onTaskDelivered (orchestrator line 507-513)
+    // Step 6: For each workflow revision, call handleTaskCompletion (orchestrator line 507-513)
     // **THIS IS THE KEY CALL** - Same as WorkflowOrchestrator.handleSubtaskSuccess()
     for (const [workflowRevisionId, edges] of workflowRevisions.entries()) {
       console.log(
@@ -179,8 +179,8 @@ export async function handleTaskCompletedEvent(
       const pipelineRef = definitionHash
 
       // **THIS IS THE KEY CALL** - Same as WorkflowOrchestrator.handleSubtaskSuccess() line 507
-      // This will call processNodeSlotInfo() and generate dependent tasks
-      const dependentTasks = await onTaskDelivered(
+      // This will call propagateToNode() and generate dependent tasks
+      const dependentTasks = await handleTaskCompletion(
         { task, output: actualOutput },
         pipelineRef,
         3, // concurrency
@@ -312,7 +312,7 @@ export async function handleTaskFailedEvent(
       `📊 Retrieved ${totalEdges} workflow node states - task ${task_id} failure affects ${workflowRevisions.size} workflow revision(s)`,
     )
 
-    // Step 5: For each workflow revision, call onTaskAborted (orchestrator line 575-581)
+    // Step 5: For each workflow revision, call handleTaskFailure (orchestrator line 575-581)
     for (const [workflowRevisionId, edges] of workflowRevisions.entries()) {
       console.log(
         `🔄 Processing workflow revision ${workflowRevisionId} for failed task ${task_id}`,
@@ -348,8 +348,8 @@ export async function handleTaskFailedEvent(
         .asset_content_hash as AssetId
       const pipelineRef = definitionHash
 
-      // Call onTaskAborted (orchestrator line 575)
-      await onTaskAborted(
+      // Call handleTaskFailure (orchestrator line 575)
+      await handleTaskFailure(
         { task, output: errorOutput },
         pipelineRef,
         3, // concurrency
@@ -529,8 +529,8 @@ export async function handleStaleUpdateRevisionCreated(
  * Process a single STALE node
  *
  * Checks if the node already has a task:
- * - If task exists and is completed: propagate to downstream via onTaskDelivered
- * - If task exists and is failed: propagate error via onTaskAborted
+ * - If task exists and is completed: propagate to downstream via handleTaskCompletion
+ * - If task exists and is failed: propagate error via handleTaskFailure
  * - If task is still running: do nothing (wait for it to complete)
  * - If no task exists: load inputs from lastInputsHash and create task
  */
@@ -633,7 +633,7 @@ async function processStaleNode(
     const output = await loadCached(
       task.currentVersion.asset_content_hash as AssetId,
     )
-    await onTaskDelivered(
+    await handleTaskCompletion(
       { task, output },
       pipelineRef,
       3,
@@ -652,7 +652,7 @@ async function processStaleNode(
     const errorOutput = await loadCached(
       task.currentVersion.asset_content_hash as AssetId,
     )
-    await onTaskAborted(
+    await handleTaskFailure(
       { task, output: errorOutput },
       pipelineRef,
       3,
@@ -733,9 +733,9 @@ export async function handlePlayerSubmittedEvent(
     const definitionHash = actionDetails.currentVersion.asset_content_hash as AssetId
     const pipelineRef = definitionHash
 
-    // Step 4: Call onTaskDelivered - this will mark downstream nodes as STALE via processNodeReady
+    // Step 4: Call handleTaskCompletion - this will mark downstream nodes as STALE via processNodeReady
     console.log(`🔄 Propagating player input to downstream nodes...`)
-    const dependentTasks = await onTaskDelivered(
+    const dependentTasks = await handleTaskCompletion(
       { task, output: playerOutput },
       pipelineRef,
       3, // concurrency
@@ -817,9 +817,9 @@ export async function handlePlayerFailedEvent(
     const definitionHash = actionDetails.currentVersion.asset_content_hash as AssetId
     const pipelineRef = definitionHash
 
-    // Step 4: Call onTaskAborted to propagate failure
+    // Step 4: Call handleTaskFailure to propagate failure
     console.log(`🔄 Propagating player failure to workflow...`)
-    await onTaskAborted(
+    await handleTaskFailure(
       { task, output: errorOutput },
       pipelineRef,
       3, // concurrency

@@ -84,6 +84,8 @@ input NodeStateUpdateInput {
   requiredTaskId: TraceId
   # 指定此节点最后计算的输入哈希 (v13新增)
   lastInputsHash: AssetId
+  # 指定此节点的meta slot值资产哈希 (^ prefix slots)
+  metaAssetHash: AssetId
   # 指定要更新的循环迭代实例
   # iterationId: Int!  # TODO: 实现循环迭代功能
 }
@@ -176,6 +178,8 @@ type WorkflowRevisionNodeState {
   # 此节点最后计算的输入哈希 (v13新增)，用于stale检测
   # 存储节点inputs的Asset ID，允许直接加载和比较
   lastInputsHash: AssetId
+  # 此节点的meta slot值资产哈希 (^ prefix slots, v17新增)
+  metaAssetHash: AssetId
 }
 
 # 工作流修订版实例: 代表一次完整的工作流执行状态容器
@@ -246,11 +250,6 @@ type WorkflowRevisionNodeStateConnection {
 type WorkflowRevisionNodeStateEdge {
   cursor: String!
   node: WorkflowRevisionNodeState!
-}
-
-# --- 认证和用户信息 ---
-type AuthPayload {
-  token: String!
 }
 
 type Profile {
@@ -403,7 +402,6 @@ type Query {
 # ------------------------------------------------------------------
 type Mutation {
   # --- 通用API ---
-  login(username: String!, password: String!): AuthPayload!
 
   # --- APIs for Clients (CLI / Web UI) ---
   # 这些API用于提交用户意图，由Workflow Engine异步处理

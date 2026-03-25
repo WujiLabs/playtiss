@@ -227,6 +227,7 @@ function createSchema(
           runtime_status TEXT NOT NULL,
           error_message TEXT,
           required_task_id TEXT,
+          meta_asset_hash TEXT,
           PRIMARY KEY (workflow_revision_id, node_id_in_workflow, context_asset_hash),
           FOREIGN KEY (workflow_revision_id) REFERENCES Versions(version_id),
           FOREIGN KEY (last_used_version_id) REFERENCES Versions(version_id)

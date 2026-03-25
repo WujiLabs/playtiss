@@ -8,7 +8,7 @@
  * Flow:
  * 1. Check if workflow is already completed
  * 2. Parse workflow definition
- * 3. Call onPipelineClaimed to dispatch initial tasks
+ * 3. Call handleWorkflowStart to dispatch initial tasks
  * 4. Process any already-completed initial tasks
  * 5. Return - event bus takes over from here
  */
@@ -20,11 +20,11 @@ import {
 } from 'playtiss'
 import { type Pipeline } from 'playtiss/pipeline'
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
-import type { PendingTask, Task } from '../graphql/types.js'
+import type { Task } from '../graphql/types.js'
 import {
-  onPipelineClaimed,
-  onTaskAborted,
-  onTaskDelivered,
+  handleWorkflowStart,
+  handleTaskFailure,
+  handleTaskCompletion,
 } from '../pipeline/scheduler.js'
 import { loadCached } from '../utils/asset-cache.js'
 
@@ -81,8 +81,8 @@ export async function orchestrateWorkflow(
       `✅ Loaded workflow definition (${definitionHash}) for ${config.workflowTaskId}`,
     )
 
-    // Step 3: Call onPipelineClaimed to dispatch initial tasks
-    const initialTasks = await onPipelineClaimed(
+    // Step 3: Call handleWorkflowStart to dispatch initial tasks
+    const initialTasks = await handleWorkflowStart(
       {
         task: config.workflowTask,
         workflowRevisionId: config.workflowRevisionId,
@@ -93,13 +93,13 @@ export async function orchestrateWorkflow(
     )
 
     console.log(
-      `📋 onPipelineClaimed returned ${initialTasks.length} initial tasks`,
+      `📋 handleWorkflowStart returned ${initialTasks.length} initial tasks`,
     )
 
     // Step 4: Process any already-completed initial tasks
     // (handles race where task completed before orchestration started)
     for (const task of initialTasks) {
-      if (isTask(task) && task.currentVersion) {
+      if (task.currentVersion) {
         const taskId = task.id!
 
         switch (task.currentVersion.type) {
@@ -213,8 +213,8 @@ async function processCompletedTask(
   // Step 1: Load output asset
   const output = await loadCached(task.currentVersion.asset_content_hash as AssetId)
 
-  // Step 2: Call onTaskDelivered to propagate to dependent tasks
-  const dependentTasks = await onTaskDelivered(
+  // Step 2: Call handleTaskCompletion to propagate to dependent tasks
+  const dependentTasks = await handleTaskCompletion(
     { task, output },
     pipelineRef,
     3, // concurrency
@@ -224,7 +224,7 @@ async function processCompletedTask(
 
   // Step 3: Recursively process any dependent tasks that are also already completed/failed
   for (const depTask of dependentTasks) {
-    if (isTask(depTask) && depTask.currentVersion) {
+    if (depTask.currentVersion) {
       if (depTask.currentVersion.type === 'OUTPUT') {
         await processCompletedTask(
           depTask,
@@ -281,8 +281,8 @@ async function processFailedTask(
     )
   }
 
-  // Step 2: Call onTaskAborted
-  await onTaskAborted(
+  // Step 2: Call handleTaskFailure
+  await handleTaskFailure(
     { task, output: errorOutput },
     pipelineRef,
     3, // concurrency
@@ -341,12 +341,6 @@ function isPipeline(pipeline: unknown): pipeline is Pipeline {
   )
 }
 
-/**
- * Type guard to check if task is a Task (not PendingTask)
- */
-function isTask(task: Task | PendingTask): task is Task {
-  return task && '__typename' in task && task.__typename === 'Task'
-}
 
 /**
  * Update WorkflowRevisionNodeStates for a completed/failed task

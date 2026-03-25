@@ -9,7 +9,28 @@
  *
  * This is SQLite-specific and can be removed when migrating to databases
  * that support true concurrent writes (MySQL, PostgreSQL).
+ *
+ * ## API
+ * - `withTransaction(name, fn)` — serialized + transactional (common case)
+ * - `serializeMutation(name, fn)` — serialized, no transaction (rare: mixed patterns)
+ * - `runInTransaction(db, txnId, fn)` — bare transaction, no serialization
+ *   (only inside an already-serialized context)
+ *
+ * All `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` MUST go through these helpers.
+ * A grep-based test enforces this — see no-raw-transactions.test.ts.
  */
+
+import type sqlite3 from 'sqlite3'
+import { getDB } from '../db.js'
+
+/**
+ * Context passed to operations running inside a transaction.
+ * Identical to InternalOperationContext in database-operations.ts.
+ */
+export interface TransactionContext {
+  db: sqlite3.Database
+  transactionId: string
+}
 
 export class MutationSerializer {
   private queue: Promise<unknown> = Promise.resolve()
@@ -135,4 +156,59 @@ export function serializeMutation<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   return getMutationSerializer().serialize(operationName, operation)
+}
+
+/**
+ * Run a function inside BEGIN IMMEDIATE / COMMIT / ROLLBACK
+ * WITHOUT serialization.
+ *
+ * @warning Only call this inside a `serializeMutation` context.
+ * Calling it from unserialized code risks "cannot start a transaction
+ * within a transaction" errors.
+ */
+export function runInTransaction<T>(
+  db: sqlite3.Database,
+  transactionId: string,
+  fn: (ctx: TransactionContext) => Promise<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN IMMEDIATE;', (beginErr) => {
+        if (beginErr) return reject(beginErr)
+        const ctx: TransactionContext = { db, transactionId }
+        fn(ctx)
+          .then((result) => {
+            db.run('COMMIT;', (commitErr) => {
+              if (commitErr) reject(commitErr)
+              else resolve(result)
+            })
+          })
+          .catch((error) => {
+            db.run('ROLLBACK;', () => reject(error))
+          })
+      })
+    })
+  })
+}
+
+/**
+ * Serialized + transactional execution. The common case for mutations.
+ *
+ * Combines `serializeMutation` (one-at-a-time queue) with
+ * `runInTransaction` (BEGIN IMMEDIATE / COMMIT / ROLLBACK).
+ *
+ * @warning Do NOT call `serializeMutation`, `withTransaction`, or any
+ * `DatabaseOperations` method from inside `fn` — the queue will deadlock.
+ * Use `InternalDatabaseOperations` methods instead (they don't serialize).
+ */
+export function withTransaction<T>(
+  operationName: string,
+  fn: (ctx: TransactionContext) => Promise<T>,
+): Promise<T> {
+  return serializeMutation(operationName, () => {
+    const db = getDB()
+    const transactionId
+      = `${operationName}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+    return runInTransaction(db, transactionId, fn)
+  })
 }

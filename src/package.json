@@ -45,10 +45,6 @@
       "types": "./dist/types/text.d.ts",
       "import": "./dist/types/text.js"
     },
-    "./utils/promise_map": {
-      "types": "./dist/utils/promise_map.d.ts",
-      "import": "./dist/utils/promise_map.js"
-    },
     "./types/trace_id": {
       "types": "./dist/types/trace_id.d.ts",
       "import": "./dist/types/trace_id.js"
@@ -84,34 +80,15 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@ipld/dag-cbor": "^9.2.5",
     "@stylistic/eslint-plugin": "catalog:",
     "@types/fs-extra": "catalog:",
     "@types/node": "catalog:",
-    "@vitest/coverage-v8": "^1.6.1",
+    "@vitest/coverage-v8": "^4.1.0",
     "fs-extra": "^11.3.2",
     "globals": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "^1.6.1"
-  },
-  "vitest": {
-    "environment": "node",
-    "include": [
-      "test/**/*.test.ts"
-    ],
-    "coverage": {
-      "provider": "v8",
-      "reporter": [
-        "text",
-        "json",
-        "html"
-      ],
-      "thresholds": {
-        "branches": 90,
-        "functions": 90,
-        "lines": 90,
-        "statements": 90
-      }
-    }
+    "vitest": "^4.1.0"
   }
 }

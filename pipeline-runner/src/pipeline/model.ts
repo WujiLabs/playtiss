@@ -1,8 +1,4 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 /**
  * Pipeline Model - v12 Migration
  *
@@ -18,7 +14,6 @@ import {
   type AssetValue,
   type DictAsset,
   type TraceId,
-  type ValueOrLink,
 } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
 import { type Node, type Pipeline } from 'playtiss/pipeline'
@@ -35,7 +30,12 @@ import type { Task } from '../graphql/types.js'
 /**
  * V12 Context - no longer includes "%id" since workflow task info is passed separately
  */
-export type V12Context = DictAsset
+export type V12Context = { [key: `%${string}`]: AssetValue }
+
+/**
+ * Meta slot values - keys are ^-prefixed slot names, excluded from input/context hashing
+ */
+export type MetaValues = { [key: `^${string}`]: AssetValue }
 
 /**
  * V12 Workflow Execution Context - passed to all model functions
@@ -142,7 +142,7 @@ export async function getContextAssetHash(context: V12Context): Promise<AssetId>
  * Cache for workflowRevisionId → workflowTaskId lookups
  *
  * Mapping is immutable - a workflow revision ID always belongs to the same task
- * This cache eliminates redundant GraphQL queries in onTaskDelivered()
+ * This cache eliminates redundant GraphQL queries in handleTaskCompletion()
  */
 const workflowTaskIdCache = new LRUCache<TraceId, TraceId>({
   max: 5000, // Cache up to 5k workflow revisions
@@ -214,6 +214,7 @@ export async function createTaskRecord(
   workflowContext: V12WorkflowExecutionContext,
   lastInputsHash: AssetId,
   dependencyStatus: 'FRESH' | 'STALE' = 'FRESH', // Default to FRESH for first-run scenarios
+  metaAssetHash: AssetId | null = null, // Meta slot values hash (^ prefix slots)
 ): Promise<void> {
   const contextAssetHash = await getContextAssetHash(context)
   const graphqlClient = getSharedGraphQLClient()
@@ -250,6 +251,7 @@ export async function createTaskRecord(
         contextAssetHash: contextAssetHash,
         requiredTaskId: task.id, // Critical: Link the task to this workflow node for reverse lookup
         lastInputsHash: lastInputsHash, // Store inputs hash for redelivery detection
+        ...(metaAssetHash ? { metaAssetHash } : {}), // Only include when non-null (AssetId parseValue is strict)
       },
     ],
   )
@@ -368,15 +370,15 @@ export async function getTaskRecords(
 
 /**
  * Create pending task record in merge accumulator
- * Replaces: createPendingTaskRecord()
+ * Replaces: createPartialTaskInputs()
  */
-export async function createPendingTaskRecord(
+export async function createPartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
   node: AssetId | null, // null indicates pipeline output
   asset: DictAsset,
   workflowContext: V12WorkflowExecutionContext,
-): Promise<PendingTaskTableRecord> {
+): Promise<void> {
   if (!node) {
     throw new Error(
       'Cannot create pending task record for pipeline output (node is null)',
@@ -398,19 +400,13 @@ export async function createPendingTaskRecord(
   console.log(
     `✅ Created pending task record: workflow=${workflowContext.workflowRevisionId}, node=${node}`,
   )
-
-  return {
-    workflowRevisionId: workflowContext.workflowRevisionId,
-    context: contextAssetHash,
-    node,
-  }
 }
 
 /**
  * Get pending task inputs from merge accumulator
  * Replaces: getPendingTask()
  */
-export async function getPendingTaskInputs(
+export async function getPartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
   node: AssetId | null, // null indicates pipeline output
@@ -439,9 +435,9 @@ export async function getPendingTaskInputs(
 
 /**
  * Delete pending task from merge accumulator
- * Replaces: deletePendingTask()
+ * Replaces: deletePartialTaskInputs()
  */
-export async function deletePendingTask(
+export async function deletePartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
   node: AssetId | null, // null indicates pipeline output
@@ -468,9 +464,9 @@ export async function deletePendingTask(
 
 /**
  * Atomic merge update operation using GraphQL
- * Replaces: updateAndRetrieveTaskMergeAsset()
+ * Replaces: updatePartialTaskInputs()
  */
-export async function updateAndRetrieveTaskMergeAsset(
+export async function updatePartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
   node: AssetId | null, // null indicates pipeline output
@@ -509,23 +505,6 @@ export async function updateAndRetrieveTaskMergeAsset(
   return result
 }
 
-/**
- * Update task status in workflow state
- * Replaces: updateTaskStatus()
- *
- * NOTE: This was a no-op in the original model.ts and remains a no-op in v12.
- * Task status is managed by Workers via TaskExecutionStates, not by the scheduler.
- */
-export async function updateTaskStatus(
-  _pipeline: AssetId,
-  _task: ValueOrLink<Task>,
-  eventType: string,
-) {
-  // No-op: Task status management is handled by Workers via TaskExecutionStates
-  // This function exists for backward compatibility with scheduler.ts
-  console.log(`📊 Update task status (no-op): event=${eventType}`)
-}
-
 // ================================================================
 // TYPE DEFINITIONS (preserve existing interfaces)
 // ================================================================
@@ -535,12 +514,6 @@ type TaskTableRecord = {
   context: AssetId
   node: AssetId
   task: Task
-}
-
-type PendingTaskTableRecord = {
-  workflowRevisionId: TraceId
-  context: AssetId
-  node: AssetId | null // null indicates pipeline output
 }
 
 // ================================================================

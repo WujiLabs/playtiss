@@ -1,15 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 import { ApolloServer } from '@apollo/server'
 import { readFileSync } from 'fs'
 import type { Resolvers } from './__generated__/graphql.js'
-import {
-  // assertAuthenticatedContext, // Not explicitly used by new resolvers directly in this file
-  type ExtendUserContext,
-} from './auth/user.js'
 
 // Scalar imports
 import { ActionIdScalar } from './scalars/action_id.js'
@@ -53,7 +45,6 @@ import {
   deleteMergeAccumulator as mutationDeleteMergeAccumulator,
   failPlayerTask as mutationFailPlayerTask,
   forkWorkflowRevision as mutationForkWorkflowRevision,
-  login as mutationLogin,
   mergeMergeAccumulator as mutationMergeMergeAccumulator,
   refreshTask as mutationRefreshTask,
   reportTaskFailure as mutationReportTaskFailure,
@@ -71,7 +62,7 @@ import {
 // Export typeDefs and resolvers for shared use
 export const typeDefs = readFileSync('./schema.graphql', { encoding: 'utf-8' })
 
-export const resolvers: Resolvers<ExtendUserContext> = {
+export const resolvers: Resolvers = {
   ActionId: ActionIdScalar,
   AssetId: AssetIdScalar,
   TraceId: TraceIdScalar,
@@ -102,7 +93,6 @@ export const resolvers: Resolvers<ExtendUserContext> = {
     getInterceptorSession: queryGetInterceptorSession,
   },
   Mutation: {
-    login: mutationLogin,
     createAction: mutationCreateAction,
     createComputationalTask: mutationCreateComputationalTask,
     createVersion: mutationCreateVersion,
@@ -130,8 +120,8 @@ export const resolvers: Resolvers<ExtendUserContext> = {
 // Factory function to create Apollo Server with optional plugins
 export function createApolloServer(
   plugins?: any[],
-): ApolloServer<ExtendUserContext> {
-  return new ApolloServer<ExtendUserContext>({
+): ApolloServer {
+  return new ApolloServer({
     typeDefs,
     resolvers,
     plugins,

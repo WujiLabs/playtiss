@@ -5,7 +5,6 @@ import cors from 'cors'
 import { config } from 'dotenv'
 import express from 'express'
 import http from 'http'
-import { parseUserContext } from '../auth/user.js'
 import { shutdownDB } from '../db.js'
 import { createApolloServer } from '../server.js'
 
@@ -34,16 +33,7 @@ async function startServer() {
     '/',
     cors(),
     express.json(),
-    expressMiddleware(server, {
-      context: async ({ req }) => {
-        const ip
-          = (req.headers['x-forwarded-for'] as string)
-            || req.socket.remoteAddress
-            || ''
-        const token = req.headers.authorization || ''
-        return parseUserContext(token, ip)
-      },
-    }),
+    expressMiddleware(server),
   )
 
   // Start HTTP server

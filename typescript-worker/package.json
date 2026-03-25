@@ -20,6 +20,7 @@
     "@apollo/client": "^3.8.0",
     "dotenv": "catalog:",
     "graphql": "catalog:",
+    "p-limit": "catalog:",
     "playtiss": "workspace:*"
   },
   "devDependencies": {

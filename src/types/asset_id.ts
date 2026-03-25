@@ -1,11 +1,21 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import { CID } from 'multiformats/cid'
+import * as dagJSON from '@ipld/dag-json'
+import * as raw from 'multiformats/codecs/raw'
+import { sha256 } from 'multiformats/hashes/sha2'
 
-// AssetId is an IPLD CID string (e.g. "bafyreib..." for dag-json, "bafkrei..." for raw binary).
-// Replaces the old SHA-256 hex string format.
-export type AssetId = string
+// AssetId: branded string — prevents accidental plain string assignment.
+// Uses a unique symbol brand to avoid conflict with multiformats' Phantom<Link> types.
+declare const AssetIdBrand: unique symbol
+export type AssetId = string & { readonly [AssetIdBrand]: true }
 
+// Strict: must be a valid CID with playtiss-compatible codec + hash.
 export function isAssetId(input: string): input is AssetId {
-  try { CID.parse(input); return true }
+  try {
+    const cid = CID.parse(input)
+    if (cid.multihash.code !== sha256.code) return false
+    if (cid.code !== dagJSON.code && cid.code !== raw.code) return false
+    return true
+  }
   catch { return false }
 }

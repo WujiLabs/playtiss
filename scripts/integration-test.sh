@@ -11,8 +11,9 @@ VERBOSE=false
 [[ "${1:-}" == "--verbose" ]] && VERBOSE=true
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ACTION_ID="019d048e-d525-89ca-8fed-1f12e6000001"
-UPSTREAM_NODE_ID="baguqeeraxy6baoxenupejeatrvblqb4wzjl4nqst6y36h7azkafny6ragw3q" # Node 1 (A+B), feeds into Node 2
+ACTION_ID="019d23fa-a774-8dc0-8804-715744000001"
+SPLIT_ACTION_ID="019d23fa-abce-814e-8ca4-d42c21000001"
+UPSTREAM_NODE_ID="baguqeera4sg6p7aezxlgjdnholkkbsdtgi7fg6l2g7sjaossd3fr6bxvydoa" # Node 1 (A+B), feeds into Node 2
 TEST_DB_SOURCE="$PROJECT_ROOT/graphql-server/playtiss-test-add3.db"
 TEMP_DB=""
 PIDS=()
@@ -109,10 +110,10 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 nvm use 24.13 >/dev/null 2>&1 || { err "nvm use 24.13 failed"; exit 1; }
 
-# Ensure playtiss package is built (required for pipeline-runner compilation)
-log "Building playtiss package..."
-(cd "$PROJECT_ROOT/src" && pnpm build) >/dev/null 2>&1 || { err "Failed to build playtiss package"; exit 1; }
-log "  playtiss package built."
+# Build all packages from root (playtiss first, then all dependents)
+log "Building all packages..."
+(cd "$PROJECT_ROOT" && pnpm build) >/dev/null 2>&1 || { err "pnpm build failed"; exit 1; }
+log "  All packages built."
 
 # Kill any existing processes on port 4000
 if lsof -ti:4000 >/dev/null 2>&1; then
@@ -304,6 +305,37 @@ if $STALE_CLEARED; then
   PASS=$((PASS + 1))
 else
   err "  ✗ Still have $STALE_COUNT stale node(s)"
+  FAIL=$((FAIL + 1))
+fi
+
+########################################################################
+# Step 7: Run split/merge workflow
+########################################################################
+STEP=$((STEP + 1))
+log "Step $STEP: Run split/merge workflow"
+
+SPLIT_RUN_OUTPUT=$(cd "$PROJECT_ROOT/cli" && pnpm dev run "$SPLIT_ACTION_ID" -i test-split-inputs.json 2>&1)
+vlog "Split run output: $SPLIT_RUN_OUTPUT"
+
+SPLIT_HANDLE=$(echo "$SPLIT_RUN_OUTPUT" | grep "Execution requested:" | grep -oE '019[0-9a-f-]{31,35}' | head -1)
+if [[ -z "$SPLIT_HANDLE" ]]; then
+  err "Failed to extract SPLIT_HANDLE from run output"
+  echo "$SPLIT_RUN_OUTPUT"
+  exit 1
+fi
+log "  SPLIT_HANDLE=$SPLIT_HANDLE"
+
+# Split creates multiple tasks — needs longer timeout
+SPLIT_STATUS=$(poll_status "$SPLIT_HANDLE" "COMPLETED" 120 "FRESH/IDLE")
+assert_contains "Split/merge workflow completed" "$SPLIT_STATUS" "Status: COMPLETED"
+# add_two runs in 2 contexts (one per split item) — builtin split/merge nodes don't create WRNS records
+# So we expect 2 FRESH/IDLE entries (both are the add_two node in different contexts)
+FRESH_IDLE_COUNT=$(echo "$SPLIT_STATUS" | grep -c 'FRESH/IDLE' || true)
+if [[ "$FRESH_IDLE_COUNT" -ge 2 ]]; then
+  log "  ✓ Split/merge nodes FRESH/IDLE (found $FRESH_IDLE_COUNT)"
+  PASS=$((PASS + 1))
+else
+  err "  ✗ Expected >=2 FRESH/IDLE nodes, found $FRESH_IDLE_COUNT"
   FAIL=$((FAIL + 1))
 fi
 

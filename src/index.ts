@@ -7,7 +7,10 @@ export {
   CID,
   isLink,
   type AssetValue,
+  type DagJsonLink,
   type DictAsset,
+  type PlaytissLink,
+  type RawLink,
 } from './types/asset_value.js'
 
 export {

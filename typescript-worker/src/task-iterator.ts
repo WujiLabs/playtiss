@@ -1,14 +1,9 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 /**
  * Task Iterator for TypeScript Worker
  *
- * This implements the simple forward pagination approach for discovering
- * and monitoring runnable tasks. Based on the Python implementation but
- * uses the efficient SQL filtering instead of the 4-state machine.
+ * Implements forward pagination for discovering and monitoring runnable tasks.
+ * Uses server-side SQL filtering with cursor-based Relay pagination.
  */
 import type { ActionId, TraceId } from 'playtiss'
 import { GraphQLClient } from './graphql-client.js'

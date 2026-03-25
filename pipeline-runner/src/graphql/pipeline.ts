@@ -1,8 +1,4 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 /**
  * Pipeline Runner GraphQL Client - v12 Handle-Based API Migration
  *
@@ -373,6 +369,7 @@ const GET_REVISION = graphql(/* GraphQL */ `
         dependencyStatus
         runtimeStatus
         lastInputsHash
+        metaAssetHash
         lastUsedVersion {
           id
           type
@@ -402,6 +399,7 @@ const GET_NODE_STATE = graphql(/* GraphQL */ `
       dependencyStatus
       runtimeStatus
       lastInputsHash
+      metaAssetHash
       lastUsedVersion {
         id
         type
@@ -1278,6 +1276,7 @@ export class PipelineGraphQLClient {
       contextAssetHash: AssetId
       requiredTaskId?: TraceId | null
       lastInputsHash?: AssetId | null
+      metaAssetHash?: AssetId | null
     }>,
   ): Promise<boolean> {
     try {
@@ -1286,7 +1285,7 @@ export class PipelineGraphQLClient {
       const cachedPromises: Promise<void>[] = []
 
       for (const update of nodeUpdates) {
-        const cacheKey = `${revisionId}:${update.nodeId}:${update.contextAssetHash}:${update.requiredTaskId ?? ''}:${update.dependencyStatus ?? ''}:${update.runtimeStatus ?? ''}:${update.lastInputsHash ?? ''}`
+        const cacheKey = `${revisionId}:${update.nodeId}:${update.contextAssetHash}:${update.requiredTaskId ?? ''}:${update.dependencyStatus ?? ''}:${update.runtimeStatus ?? ''}:${update.lastInputsHash ?? ''}:${update.metaAssetHash ?? ''}`
 
         const cachedPromise = this.nodeStateCache.get(cacheKey)
         if (cachedPromise) {

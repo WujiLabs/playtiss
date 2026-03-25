@@ -559,7 +559,7 @@ export class WorkflowEngine {
   // ================================================================
   // Note: Output changes are now handled naturally by the event bus.
   // When a task's output changes, a new task_completed event is produced,
-  // which the event bus consumes and processes via onTaskDelivered.
+  // which the event bus consumes and processes via handleTaskCompletion.
   // The scheduler automatically handles dependent task updates without
   // needing explicit workflow restart logic.
 
@@ -571,7 +571,7 @@ export class WorkflowEngine {
    * Event Bus Consumer Loop
    *
    * Subscribes to task completion/failure events and processes them
-   * by calling onTaskDelivered/onTaskAborted (which call processNodeSlotInfo)
+   * by calling handleTaskCompletion/handleTaskFailure (which call propagateToNode)
    *
    * This replaces the polling logic in WorkflowOrchestrator.handleSubtaskUpdate()
    */
@@ -612,7 +612,7 @@ export class WorkflowEngine {
 
             switch (event.topic) {
               case 'task_completed':
-                // This will call onTaskDelivered → processNodeSlotInfo
+                // This will call handleTaskCompletion → propagateToNode
                 await handleTaskCompletedEvent(
                   event,
                   this.graphqlClient,
@@ -628,7 +628,7 @@ export class WorkflowEngine {
                 break
 
               case 'task_failed':
-                // This will call onTaskAborted
+                // This will call handleTaskFailure
                 await handleTaskFailedEvent(
                   event,
                   this.graphqlClient,

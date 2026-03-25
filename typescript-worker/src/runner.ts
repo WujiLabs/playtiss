@@ -1,17 +1,13 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 /**
  * Task Runner for TypeScript Worker
  *
- * This module provides the main task execution logic, similar to the Python
- * playtiss-action-runner runner.py implementation. It handles task claiming,
- * execution, and result reporting.
+ * Handles task claiming, execution, and result reporting using p-limit
+ * for concurrency control and a Set for deduplication tracking.
  */
 import type { ActionId, AssetId, DictAsset, TraceId } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
+import pLimit from 'p-limit'
 import { GraphQLClient } from './graphql-client.js'
 import { TaskIterator, type TaskInfo } from './task-iterator.js'
 
@@ -51,111 +47,31 @@ function safeStore(asset: DictAsset, context: string = 'asset'): Promise<AssetId
 async function readTaskInput(taskId: string, client: GraphQLClient): Promise<DictAsset | null> {
   console.info(`Attempting to read task input for ${taskId}`)
 
-  try {
-    // Get task details from GraphQL to find inputs_content_hash
-    console.info(`Getting task details via GraphQL for ${taskId}`)
-    const task = await client.getTask(taskId as TraceId)
-    console.info(`Task details:`, task)
-
-    if (!task) {
-      console.error(`Task ${taskId} not found in GraphQL`)
-      return null
-    }
-
-    // Extract inputs_content_hash from GraphQL response
-    const inputsContentHash = task.inputsContentHash
-    if (!inputsContentHash) {
-      console.error(`No inputsContentHash found for task ${taskId}`)
-      return null
-    }
-
-    console.info(`Found inputsContentHash from GraphQL: ${inputsContentHash}`)
-
-    // Load the actual input asset
-    console.info(`Loading input asset: ${inputsContentHash}`)
-
-    try {
-      const inputData = await load(inputsContentHash as AssetId)
-      console.info(`Loaded input data:`, inputData)
-
-      if (typeof inputData === 'object' && inputData !== null && !Array.isArray(inputData) && !(inputData instanceof Uint8Array)) {
-        return inputData as DictAsset
-      }
-      else {
-        console.error(`Input data is not a dict: ${typeof inputData}`, inputData)
-        return null
-      }
-    }
-    catch (error) {
-      if (error instanceof Error) {
-        if (error.message.includes('not found') || error.message.includes('ENOENT')) {
-          console.error(`Input asset not found:`, error)
-        }
-        else if (error.message.includes('permission') || error.message.includes('EACCES')) {
-          console.error(`Permission denied loading input asset:`, error)
-        }
-        else {
-          console.error(`Failed to load input asset:`, error)
-        }
-      }
-      else {
-        console.error(`Failed to load input asset:`, error)
-      }
-      return null
-    }
-  }
-  catch (error) {
-    console.error(`Error reading task input for ${taskId}:`, error)
+  const task = await client.getTask(taskId as TraceId)
+  if (!task) {
+    console.error(`Task ${taskId} not found in GraphQL`)
     return null
   }
-}
 
-/**
- * Task Pool for managing concurrent task execution
- */
-export class TaskPool {
-  private concurrency: number | null
-  private tasks = new Set<Promise<void>>()
-  private taskKeys = new Set<string>()
-
-  constructor(concurrency: number | null = null) {
-    this.concurrency = concurrency
+  const inputsContentHash = task.inputsContentHash
+  if (!inputsContentHash) {
+    console.error(`No inputsContentHash found for task ${taskId}`)
+    return null
   }
 
-  contains(key: string): boolean {
-    return this.taskKeys.has(key)
-  }
+  console.info(`Found inputsContentHash from GraphQL: ${inputsContentHash}`)
 
-  isAvailable(): boolean {
-    return this.concurrency === null || this.tasks.size < this.concurrency
-  }
-
-  async waitTillAvailable(): Promise<void> {
-    while (!this.isAvailable()) {
-      // Wait for some tasks to finish before adding a new one
-      await Promise.race(this.tasks)
+  try {
+    const inputData = await load(inputsContentHash as AssetId)
+    if (typeof inputData === 'object' && inputData !== null && !Array.isArray(inputData) && !(inputData instanceof Uint8Array)) {
+      return inputData as DictAsset
     }
+    console.error(`Input data is not a dict: ${typeof inputData}`, inputData)
+    return null
   }
-
-  add(key: string, task: Promise<void>): void {
-    const wrappedTask = task.finally(() => {
-      this.tasks.delete(wrappedTask)
-      this.taskKeys.delete(key)
-    })
-
-    this.taskKeys.add(key)
-    this.tasks.add(wrappedTask)
-  }
-
-  addNewResolver(key: string): () => void {
-    let resolve: () => void
-    const promise = new Promise<void>((r) => {
-      resolve = r
-    })
-
-    this.add(key, promise)
-
-    return () => resolve()
+  catch (error) {
+    console.error(`Failed to load input asset for task ${taskId}:`, error)
+    return null
   }
 }
 
@@ -167,14 +83,22 @@ function getFutureTimestamp(ttlSec: number): number {
 }
 
 /**
- * Handle execution of a single task using v3.1 GraphQL API
+ * Check if an error message indicates a lease expiration
  */
-export async function handleNewTask(
+function isLeaseExpiredError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error)
+  return msg.includes('lease may have expired') || msg.includes('not owned by worker')
+}
+
+/**
+ * Execute a claimed task: read input, run callback, store output, report result.
+ * Linear async flow without nested try/catch blocks.
+ */
+export async function executeTask(
   client: GraphQLClient,
   taskInfo: TaskInfo,
   execute: CallbackType,
   options: {
-    pendingTaskpool: TaskPool
     taskIterator?: TaskIterator
     testRun?: boolean
     timeoutInterval?: number
@@ -184,7 +108,6 @@ export async function handleNewTask(
   },
 ): Promise<void> {
   const {
-    pendingTaskpool,
     taskIterator,
     testRun = false,
     timeoutInterval,
@@ -194,255 +117,110 @@ export async function handleNewTask(
   } = options
 
   const taskId = taskInfo.taskId
-  let resolver: (() => void) | null = null
 
-  // Get a slot in the task pool
-  await pendingTaskpool.waitTillAvailable()
-  resolver = pendingTaskpool.addNewResolver(taskId)
-
-  try {
-    if (!testRun && !isRetry) {
-      // Try to claim the task (skip if it's a retry - already claimed in retry loop)
-      console.info(`Attempting to claim task ${taskId}`)
-      const claimedState = await client.claimTask({
-        taskId: taskId as TraceId,
-        workerId,
-        ttl: timeoutInterval || 300,
-      })
-
-      if (claimedState === null) {
-        console.debug(`Could not claim task ${taskId} - already claimed or no longer PENDING`)
-        // Task is no longer PENDING, remove from retry set
-        if (taskIterator) {
-          taskIterator.markTaskCompleted(taskId)
-        }
-        return
-      }
-
-      console.info(`Successfully claimed task ${taskId}`)
-    }
-    else if (isRetry) {
-      console.info(`Processing reclaimed task ${taskId}`)
-    }
-
-    // Read task input
-    console.info(`Reading task input for ${taskId}`)
-    const inputAsset = await readTaskInput(taskId, client)
-    console.info(`Task input loaded:`, inputAsset)
-    if (inputAsset === null) {
-      throw new Error('input asset not valid')
-    }
-
-    let outputAsset: DictAsset | null = null
-    let success = true
-
-    try {
-      // Progress update callback
-      const updateCallback: ProgressUpdateType = async (asset: DictAsset) => {
-        if (timeoutInterval !== undefined) {
-          asset = { ...asset }
-          asset.worker_report_timeout = getFutureTimestamp(timeoutInterval)
-        }
-
-        if (!testRun) {
-          // TODO (Phase 2+): Implement PROGRESS version type for task progress reporting
-          // Currently disabled in Phase 1 to avoid generating too many short-lived records
-          // without CAS garbage collection. Will be re-enabled when we have proper GC.
-          console.debug(`Progress update for task ${taskId} (not persisted in Phase 1)`)
-        }
-      }
-
-      // Execute the task
-      console.info(`Executing task ${taskId} with execute function`)
-      console.info(`Input data:`, inputAsset)
-      outputAsset = await execute(
-        inputAsset,
-        { taskId, update: updateCallback },
-      )
-      console.info(`Task ${taskId} execution completed with output:`, outputAsset)
-    }
-    catch (err) {
-      console.error(`Task ${taskId} execution failed:`, err)
-      success = false
-
-      // Store error information if provided
-      if (err instanceof Error && 'output' in err && typeof err.output === 'object') {
-        outputAsset = err.output as (DictAsset | null)
-      }
-      else {
-        outputAsset = {
-          error: err instanceof Error ? err.message : String(err),
-          error_type: err instanceof Error ? err.constructor.name : 'UnknownError',
-        }
-      }
-    }
-
-    if (testRun) {
-      console.info(`Test run - Task ${taskId}: input=${JSON.stringify(inputAsset)}, output=${JSON.stringify(outputAsset)}`)
+  // Step 1: Claim the task (unless test run or retry)
+  if (!testRun && !isRetry) {
+    console.info(`Attempting to claim task ${taskId}`)
+    const claimedState = await client.claimTask({
+      taskId: taskId as TraceId,
+      workerId,
+      ttl: timeoutInterval || 300,
+    })
+    if (claimedState === null) {
+      console.debug(`Could not claim task ${taskId} - already claimed or no longer PENDING`)
+      taskIterator?.markTaskCompleted(taskId)
       return
     }
+    console.info(`Successfully claimed task ${taskId}`)
+  }
+  else if (isRetry) {
+    console.info(`Processing reclaimed task ${taskId}`)
+  }
 
-    // Store final result and create version
-    console.info(`Storing final result for task ${taskId}, success=${success}`)
-    if (outputAsset !== null) {
-      console.info(`Storing output asset:`, outputAsset)
-      const assetHash = await safeStore(outputAsset, 'task result')
-      console.info(`Output asset stored with hash: ${assetHash}`)
+  // Step 2: Read task input
+  const inputAsset = await readTaskInput(taskId, client)
+  if (inputAsset === null) {
+    throw new Error('input asset not valid')
+  }
 
-      const versionType = success ? 'OUTPUT' : 'ERROR'
-      console.info(`Creating version of type ${versionType}`)
+  // Step 3: Execute the task
+  let outputAsset: DictAsset | null = null
+  let success = true
 
-      const version = await client.createVersion({
-        taskId: taskId as TraceId,
-        versionType,
-        assetContentHash: assetHash,
-        commitMessage: success ? 'Task completion' : 'Task failed',
-      })
-      console.info(`Version created:`, version)
-
-      // Report task completion
-      try {
-        if (success) {
-          console.info(`Reporting task success for ${taskId}`)
-          await client.reportTaskSuccess({
-            taskId: taskId as TraceId,
-            workerId,
-            resultVersionId: version.id,
-          })
-          console.info(`Task ${taskId} completed successfully`)
-          // Task completed, remove from retry set
-          if (taskIterator) {
-            taskIterator.markTaskCompleted(taskId)
-          }
-        }
-        else {
-          console.info(`Reporting task failure for ${taskId}`)
-          await client.reportTaskFailure({
-            taskId: taskId as TraceId,
-            workerId,
-            errorVersionId: version.id,
-          })
-          console.info(`Task ${taskId} failed`)
-          // Task failed, remove from retry set
-          if (taskIterator) {
-            taskIterator.markTaskCompleted(taskId)
-          }
-        }
+  try {
+    const updateCallback: ProgressUpdateType = async (asset: DictAsset) => {
+      if (timeoutInterval !== undefined) {
+        asset = { ...asset }
+        asset.worker_report_timeout = getFutureTimestamp(timeoutInterval)
       }
-      catch (reportError) {
-        const reportErrMessage = reportError instanceof Error ? reportError.message : String(reportError)
-        if (reportErrMessage.includes('lease may have expired') || reportErrMessage.includes('not owned by worker')) {
-          console.error(`⚠️  Cannot deliver task result for ${taskId}: Worker lease expired. Task will be rescheduled by another worker.`)
-          // Mark task as completed to remove from retry set
-          if (taskIterator) {
-            taskIterator.markTaskCompleted(taskId)
-          }
-          return // Gracefully exit without throwing
-        }
-        throw reportError // Re-throw non-lease errors
+      if (!testRun) {
+        // TODO (Phase 2+): Implement PROGRESS version type for task progress reporting
+        console.debug(`Progress update for task ${taskId} (not persisted in Phase 1)`)
       }
+    }
+
+    outputAsset = await execute(inputAsset, { taskId, update: updateCallback })
+    console.info(`Task ${taskId} execution completed with output:`, outputAsset)
+  }
+  catch (err) {
+    console.error(`Task ${taskId} execution failed:`, err)
+    success = false
+    if (err instanceof Error && 'output' in err && typeof err.output === 'object') {
+      outputAsset = err.output as (DictAsset | null)
     }
     else {
-      // No output - report failure
-      const errorAsset: DictAsset = {
-        error: 'No output produced',
-        error_type: 'NoOutputError',
-      }
-      const assetHash = await safeStore(errorAsset, 'error (no output)')
-      const version = await client.createVersion({
-        taskId: taskId as TraceId,
-        versionType: 'ERROR',
-        assetContentHash: assetHash,
-        commitMessage: 'Task failed - no output',
-      })
-
-      try {
-        await client.reportTaskFailure({
-          taskId: taskId as TraceId,
-          workerId,
-          errorVersionId: version.id,
-        })
-        console.info(`Task ${taskId} failed - no output`)
-        // Task failed, remove from retry set
-        if (taskIterator) {
-          taskIterator.markTaskCompleted(taskId)
-        }
-      }
-      catch (reportError) {
-        const reportErrMessage = reportError instanceof Error ? reportError.message : String(reportError)
-        if (reportErrMessage.includes('lease may have expired') || reportErrMessage.includes('not owned by worker')) {
-          console.error(`⚠️  Cannot report task failure for ${taskId}: Worker lease expired. Task will be retried later.`)
-          // Add to lease-expired tasks for retry
-          if (leaseExpiredTasks) {
-            leaseExpiredTasks.set(taskId, { info: taskInfo, lastAttempt: Date.now() })
-          }
-          return // Gracefully exit without throwing
-        }
-        throw reportError // Re-throw non-lease errors
+      outputAsset = {
+        error: err instanceof Error ? err.message : String(err),
+        error_type: err instanceof Error ? err.constructor.name : 'UnknownError',
       }
     }
   }
-  catch (error) {
-    // Check for lease expiration errors and handle gracefully
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    if (errorMessage.includes('lease may have expired') || errorMessage.includes('not owned by worker')) {
-      console.error(`⚠️  Cannot deliver task result for ${taskId}: Worker lease expired or invalid. Task will be rescheduled by another worker.`)
-      // Mark task as completed to remove from retry set (another worker will handle it)
-      if (taskIterator) {
-        taskIterator.markTaskCompleted(taskId)
-      }
-      return // Gracefully exit without throwing
-    }
 
-    console.error(`Error handling task ${taskId}:`, error)
-
-    // Try to report failure if we have a client
-    if (!testRun) {
-      try {
-        const errorAsset: DictAsset = {
-          error: error instanceof Error ? error.message : String(error),
-          error_type: error instanceof Error ? error.constructor.name : 'UnknownError',
-        }
-        const assetHash = await safeStore(errorAsset, 'error (exception)')
-        const version = await client.createVersion({
-          taskId: taskId as TraceId,
-          versionType: 'ERROR',
-          assetContentHash: assetHash,
-          commitMessage: 'Task handler error',
-        })
-
-        await client.reportTaskFailure({
-          taskId: taskId as TraceId,
-          workerId,
-          errorVersionId: version.id,
-        })
-      }
-      catch (reportErr) {
-        const reportErrMessage = reportErr instanceof Error ? reportErr.message : String(reportErr)
-        if (reportErrMessage.includes('lease may have expired') || reportErrMessage.includes('not owned by worker')) {
-          console.error(`⚠️  Cannot report task failure for ${taskId}: Worker lease expired. Task will be retried later.`)
-          // Add to lease-expired tasks for retry
-          if (leaseExpiredTasks) {
-            leaseExpiredTasks.set(taskId, { info: taskInfo, lastAttempt: Date.now() })
-          }
-          return // Gracefully exit without throwing
-        }
-        console.error(`Could not report task failure:`, reportErr)
-      }
-    }
-    throw error
+  if (testRun) {
+    console.info(`Test run - Task ${taskId}: input=${JSON.stringify(inputAsset)}, output=${JSON.stringify(outputAsset)}`)
+    return
   }
-  finally {
-    if (resolver !== null) {
-      resolver()
+
+  // Step 4: Store result and report
+  if (outputAsset === null) {
+    outputAsset = { error: 'No output produced', error_type: 'NoOutputError' }
+    success = false
+  }
+
+  const assetHash = await safeStore(outputAsset, success ? 'task result' : 'error result')
+  const versionType = success ? 'OUTPUT' : 'ERROR'
+  const version = await client.createVersion({
+    taskId: taskId as TraceId,
+    versionType,
+    assetContentHash: assetHash,
+    commitMessage: success ? 'Task completion' : 'Task failed',
+  })
+
+  try {
+    if (success) {
+      await client.reportTaskSuccess({ taskId: taskId as TraceId, workerId, resultVersionId: version.id })
+      console.info(`Task ${taskId} completed successfully`)
     }
+    else {
+      await client.reportTaskFailure({ taskId: taskId as TraceId, workerId, errorVersionId: version.id })
+      console.info(`Task ${taskId} failed`)
+    }
+    taskIterator?.markTaskCompleted(taskId)
+  }
+  catch (reportError) {
+    if (isLeaseExpiredError(reportError)) {
+      console.error(`⚠️  Cannot deliver task result for ${taskId}: Worker lease expired. Task will be rescheduled by another worker.`)
+      taskIterator?.markTaskCompleted(taskId)
+      return
+    }
+    throw reportError
   }
 }
 
 /**
- * Main task runner using v3.1 GraphQL API and cursor-based pagination
+ * Main task runner loop using p-limit for concurrency and Set for dedup
  */
-export async function taskRunner(
+export async function runWorkerLoop(
   actionId: ActionId,
   execute: CallbackType,
   options: {
@@ -471,36 +249,29 @@ export async function taskRunner(
   const headers: Record<string, string> = {}
   if (workerId) headers['X-Worker-Id'] = workerId
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`
-
   const client = new GraphQLClient(graphqlUrl, headers)
 
-  const allTasks = new TaskPool()
-  const pendingTasks = new TaskPool(concurrency)
-  const leaseExpiredTasks = new Map<string, LeaseExpiredTask>() // Track tasks with expired leases
-  const taskIterator = new TaskIterator(client, actionId, {
-    pollInterval,
-    batchSize,
-  })
+  // Concurrency control via p-limit and dedup via Set
+  const taskLimit = pLimit(concurrency)
+  const activeTasks = new Set<string>()
+  const leaseExpiredTasks = new Map<string, LeaseExpiredTask>()
+  const taskIterator = new TaskIterator(client, actionId, { pollInterval, batchSize })
 
   // Periodic retry of lease-expired tasks
   let lastRetryTime = Date.now()
-  const retryInterval = 30000 // Retry lease-expired tasks every 30 seconds
+  const retryInterval = 30000
 
   try {
     for await (const taskInfo of taskIterator) {
-      // First, check if we should retry any lease-expired tasks
+      // Check if we should retry any lease-expired tasks
       const now = Date.now()
       if (now - lastRetryTime > retryInterval && leaseExpiredTasks.size > 0) {
         lastRetryTime = now
         console.info(`Checking ${leaseExpiredTasks.size} lease-expired tasks for retry...`)
 
         for (const [expiredTaskId, expiredData] of leaseExpiredTasks) {
-          // Skip if task is still being processed
-          if (allTasks.contains(expiredTaskId)) {
-            continue
-          }
+          if (activeTasks.has(expiredTaskId)) continue
 
-          // Try to reclaim the task
           console.info(`Attempting to reclaim lease-expired task ${expiredTaskId}`)
           const claimedState = await client.claimTask({
             taskId: expiredTaskId as TraceId,
@@ -509,62 +280,44 @@ export async function taskRunner(
           })
 
           if (claimedState === null) {
-            console.debug(`Could not reclaim task ${expiredTaskId} - checking status...`)
-            // Get task status to see if it's already completed
             const task = await client.getTask(expiredTaskId as TraceId)
-            if (task && task.currentVersion) {
-              // Derive runtime status from currentVersion.type
+            if (task?.currentVersion) {
               const versionType = task.currentVersion.type
               if (versionType === 'OUTPUT' || versionType === 'ERROR') {
-                const status = versionType === 'OUTPUT' ? 'SUCCEEDED' : 'FAILED'
-                console.info(`Task ${expiredTaskId} already ${status}, removing from retry list`)
+                console.info(`Task ${expiredTaskId} already ${versionType === 'OUTPUT' ? 'SUCCEEDED' : 'FAILED'}, removing from retry list`)
                 leaseExpiredTasks.delete(expiredTaskId)
                 continue
               }
             }
-            // Task is still running or pending, keep monitoring
             console.debug(`Task ${expiredTaskId} still being processed by another worker`)
           }
           else {
-            // Successfully reclaimed! Process it again
             console.info(`Successfully reclaimed task ${expiredTaskId}`)
             leaseExpiredTasks.delete(expiredTaskId)
 
-            const retryPromise = handleNewTask(client, expiredData.info, execute, {
-              testRun,
-              timeoutInterval,
-              pendingTaskpool: pendingTasks,
-              taskIterator,
-              workerId,
-              leaseExpiredTasks,
-              isRetry: true,
-            })
-
-            allTasks.add(expiredTaskId, retryPromise)
+            activeTasks.add(expiredTaskId)
+            taskLimit(() =>
+              executeTask(client, expiredData.info, execute, {
+                testRun, timeoutInterval, taskIterator, workerId, leaseExpiredTasks, isRetry: true,
+              }).finally(() => activeTasks.delete(expiredTaskId)),
+            )
           }
         }
       }
 
       const taskId = taskInfo.taskId
 
-      // Avoid reclaim if one task is updated but not delivered
-      // during the polling interval
-      if (allTasks.contains(taskId)) {
-        continue
-      }
+      // Skip if already being processed
+      if (activeTasks.has(taskId)) continue
 
       console.info(`Processing task ${taskId} for action ${actionId}`)
 
-      const taskPromise = handleNewTask(client, taskInfo, execute, {
-        testRun,
-        timeoutInterval,
-        pendingTaskpool: pendingTasks,
-        taskIterator,
-        workerId,
-        leaseExpiredTasks,
-      })
-
-      allTasks.add(taskId, taskPromise)
+      activeTasks.add(taskId)
+      taskLimit(() =>
+        executeTask(client, taskInfo, execute, {
+          testRun, timeoutInterval, taskIterator, workerId, leaseExpiredTasks,
+        }).finally(() => activeTasks.delete(taskId)),
+      )
     }
   }
   catch (error) {
@@ -577,14 +330,13 @@ export async function taskRunner(
     }
   }
   finally {
-    // Stop the iterator
     taskIterator.stop()
     await client.close()
     console.info('Task runner stopped')
   }
 }
 
-type MandatoryTaskRunnerOptions = {
+type ExecuteSingleTaskOptions = {
   timeoutInterval?: number
   forceReclaim?: boolean
 } & (
@@ -601,24 +353,22 @@ type MandatoryTaskRunnerOptions = {
 /**
  * Execute a single specific task (for testing or manual execution)
  */
-export async function mandatoryTaskRunner(
+export async function executeSingleTask(
   taskId: TraceId,
   execute: CallbackType,
-  options: MandatoryTaskRunnerOptions = { workerId: undefined },
+  options: ExecuteSingleTaskOptions = { workerId: undefined },
 ): Promise<void> {
   const {
     timeoutInterval,
     forceReclaim = false,
   } = options
 
-  // Use provided client or create a new one
   let client: GraphQLClient
   let workerId: string
   let shouldCloseClient = false
 
   if ('graphqlClient' in options) {
     client = options.graphqlClient
-    // Extract workerId from client to ensure consistency
     workerId = client.workerId || `ts-mandatory-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`
   }
   else {
@@ -627,63 +377,50 @@ export async function mandatoryTaskRunner(
       graphqlUrl = process.env.PLAYTISS_GRAPHQL_URL || 'http://localhost:4000/graphql',
       workerId: providedWorkerId,
     } = options
-
-    // Generate unique worker ID if not provided
     workerId = providedWorkerId || `ts-mandatory-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`
-
     const headers: Record<string, string> = {}
     if (workerId) headers['X-Worker-Id'] = workerId
     if (authToken) headers['Authorization'] = `Bearer ${authToken}`
-
     client = new GraphQLClient(graphqlUrl, headers)
     shouldCloseClient = true
   }
 
   try {
+    // Read input
     const inputAsset = await readTaskInput(taskId, client)
     if (inputAsset === null) {
       throw new Error('input asset not valid')
     }
 
-    // Try to claim the task
+    // Claim the task
     if (forceReclaim) {
       console.info(`Force reclaim requested for task ${taskId}`)
-
-      // First, try normal claim (works if task is PENDING or has expired claim)
       const claimedState = await client.claimTask({
         taskId: taskId as TraceId,
         workerId,
-        ttl: timeoutInterval || 600, // 10 minutes default
+        ttl: timeoutInterval || 600,
       })
-
       if (claimedState === null) {
-        // Normal claim failed, which means task is actively claimed by another worker
-        // For force_reclaim, we'll proceed anyway with a warning
         console.warn(`Force reclaim: Task ${taskId} is currently claimed by another worker, proceeding anyway`)
         console.warn('Note: This may cause conflicts if the other worker is still active')
-
-        // We'll continue without a formal claim - this is for testing/debugging only
-        // In a production system, you might want to add a forceClaimTask GraphQL mutation
       }
       else {
         console.info(`Force reclaim: Successfully claimed task ${taskId} normally`)
       }
     }
     else {
-      // Normal claiming behavior
       const claimedState = await client.claimTask({
         taskId: taskId as TraceId,
         workerId,
-        ttl: timeoutInterval || 600, // 10 minutes default
+        ttl: timeoutInterval || 600,
       })
-
       if (claimedState === null) {
         throw new Error('Task could not be claimed - it may be already claimed by another worker or completed')
       }
-
       console.info(`Successfully claimed task ${taskId}`)
     }
 
+    // Execute
     let outputAsset: DictAsset | null = null
     let success = true
 
@@ -693,17 +430,9 @@ export async function mandatoryTaskRunner(
           asset = { ...asset }
           asset.worker_report_timeout = getFutureTimestamp(timeoutInterval)
         }
-
-        // TODO (Phase 2+): Implement PROGRESS version type for task progress reporting
-        // Currently disabled in Phase 1 to avoid generating too many short-lived records
-        // without CAS garbage collection. Will be re-enabled when we have proper GC.
         console.debug(`Progress update for mandatory task ${taskId} (not persisted in Phase 1)`)
       }
-
-      outputAsset = await execute(inputAsset, {
-        taskId,
-        update: updateCallback,
-      })
+      outputAsset = await execute(inputAsset, { taskId, update: updateCallback })
     }
     catch (err) {
       console.error(`Mandatory task execution failed:`, err)
@@ -719,7 +448,7 @@ export async function mandatoryTaskRunner(
       }
     }
 
-    // Store final result
+    // Store and report
     const assetHash = await safeStore(outputAsset || {}, 'mandatory task result')
     const versionType = success ? 'OUTPUT' : 'ERROR'
     const version = await client.createVersion({
@@ -729,42 +458,29 @@ export async function mandatoryTaskRunner(
       commitMessage: success ? 'Mandatory task completion' : 'Mandatory task failed',
     })
 
-    // Report completion
     try {
       if (success) {
-        await client.reportTaskSuccess({
-          taskId,
-          workerId,
-          resultVersionId: version.id,
-        })
+        await client.reportTaskSuccess({ taskId, workerId, resultVersionId: version.id })
         console.info(`Mandatory task ${taskId} completed successfully`)
       }
       else {
-        await client.reportTaskFailure({
-          taskId,
-          workerId,
-          errorVersionId: version.id,
-        })
+        await client.reportTaskFailure({ taskId, workerId, errorVersionId: version.id })
         console.info(`Mandatory task ${taskId} failed`)
       }
     }
     catch (reportError) {
-      const reportErrMessage = reportError instanceof Error ? reportError.message : String(reportError)
-      if (reportErrMessage.includes('lease may have expired') || reportErrMessage.includes('not owned by worker')) {
+      if (isLeaseExpiredError(reportError)) {
         console.error(`⚠️  Cannot report mandatory task completion for ${taskId}: Worker lease expired. Task will be rescheduled.`)
-        return // Gracefully exit without throwing
+        return
       }
-      throw reportError // Re-throw non-lease errors
+      throw reportError
     }
   }
   catch (error) {
-    // Check for lease expiration errors and handle gracefully
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    if (errorMessage.includes('lease may have expired') || errorMessage.includes('not owned by worker')) {
+    if (isLeaseExpiredError(error)) {
       console.error(`⚠️  Cannot complete mandatory task ${taskId}: Worker lease expired or invalid. Task will be rescheduled by another worker.`)
-      return // Gracefully exit without throwing
+      return
     }
-
     console.error(`Error in mandatory task runner:`, error)
     throw error
   }
@@ -774,3 +490,4 @@ export async function mandatoryTaskRunner(
     }
   }
 }
+

@@ -18,7 +18,6 @@ import {
 import sqlite3 from 'sqlite3' // Import sqlite3 for Database type hint in helper
 import type {
   Action,
-  AuthPayload,
   NodeStateUpdateInput,
   Scalars,
   Task,
@@ -35,7 +34,11 @@ import {
   InternalDatabaseOperations,
   executeRefreshTaskInternal,
 } from '../db/database-operations.js'
-import { serializeMutation } from '../db/mutation-serializer.js'
+import {
+  runInTransaction,
+  serializeMutation,
+  withTransaction,
+} from '../db/mutation-serializer.js'
 import { SqliteEventProducer } from '../event-bus/sqlite-producer.js'
 import { getDefaultContextAssetId } from '../utils/context.js'
 
@@ -56,81 +59,6 @@ interface TaskRow {
 
 // Global operation context for maintaining TraceId generator across related operations
 let currentTraceIdGenerator: TraceIdGenerator | null = null
-
-/**
- * Retry helper for SQLITE_BUSY errors with exponential backoff
- */
-async function retryOnSqliteBusy<T>(
-  operation: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 100,
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation()
-    }
-    catch (error: any) {
-      const isSqliteBusy
-        = error.code === 'SQLITE_BUSY'
-          || error.message?.includes('SQLITE_BUSY')
-          || error.message?.includes('database is locked')
-
-      if (!isSqliteBusy || attempt === maxRetries) {
-        throw error
-      }
-
-      // Exponential backoff with jitter
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 100
-      console.log(
-        `SQLITE_BUSY retry ${attempt + 1}/${maxRetries} after ${delay}ms: ${error.message}`,
-      )
-      await new Promise(resolve => setTimeout(resolve, delay))
-    }
-  }
-  throw new Error('Max retries exceeded') // Should never reach here
-}
-
-/**
- * Helper function to safely execute a transaction with nested transaction detection
- */
-function executeInTransaction<T>(
-  db: sqlite3.Database,
-  operation: (startedTransaction: boolean) => void,
-  debugName: string = 'transaction',
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    db.serialize(() => {
-      let startedTransaction = true
-      db.run('BEGIN TRANSACTION;', (beginErr) => {
-        if (beginErr) {
-          if (
-            beginErr.message.includes(
-              'cannot start a transaction within a transaction',
-            )
-          ) {
-            console.log(`${debugName}: Using existing transaction`)
-            startedTransaction = false
-          }
-          else {
-            return reject(beginErr)
-          }
-        }
-
-        try {
-          operation(startedTransaction)
-        }
-        catch (error) {
-          if (startedTransaction) {
-            db.run('ROLLBACK;', () => reject(error))
-          }
-          else {
-            reject(error)
-          }
-        }
-      })
-    })
-  })
-}
 
 /**
  * Gets or creates a TraceId generator for the current operation context.
@@ -159,72 +87,6 @@ function getOperationTraceIdGenerator(
 function getTimestampFromTraceId(traceId: TraceId): number {
   const parsed = parseTraceId(traceId)
   return parsed.timestamp
-}
-
-/**
- * Helper function to create a Task and its corresponding TaskExecutionStates in a transaction.
- * This ensures atomic creation of both records for command tasks and computational tasks.
- */
-function createTaskWithExecutionState(
-  db: sqlite3.Database,
-  taskId: TraceId,
-  actionId: ActionId,
-  inputsContentHash: AssetId,
-  name: string,
-  description: string,
-  timestamp: number,
-  scopeId: string = default_scope_id,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      let startedTransaction = true
-      db.run('BEGIN TRANSACTION;', (beginErr) => {
-        if (beginErr) {
-          // Check if error is due to nested transaction
-          if (
-            beginErr.message.includes(
-              'cannot start a transaction within a transaction',
-            )
-          ) {
-            console.log(
-              'createTaskWithExecutionState: Using existing transaction',
-            )
-            startedTransaction = false
-          }
-          else {
-            return reject(beginErr)
-          }
-        }
-
-        // Use the transaction-aware helper function for the actual work
-        createTaskWithExecutionStateInTransaction(
-          db,
-          taskId,
-          actionId,
-          inputsContentHash,
-          name,
-          description,
-          timestamp,
-          scopeId,
-        )
-          .then(() => {
-            if (startedTransaction) {
-              db.run('COMMIT;', (commitErr) => {
-                if (commitErr) return reject(commitErr)
-                resolve()
-              })
-            }
-            else {
-              resolve()
-            }
-          })
-          .catch((err) => {
-            if (startedTransaction) db.run('ROLLBACK;')
-            reject(err)
-          })
-      }) // Close db.run("BEGIN TRANSACTION;") callback
-    })
-  })
 }
 
 /**
@@ -316,17 +178,6 @@ function createTaskWithExecutionStateInTransaction(
       },
     )
   })
-}
-
-export const login = async (
-  _parent: unknown,
-  args: { username: string, password: string },
-): Promise<AuthPayload> => {
-  console.log(`Login attempt for user: ${args.username}`)
-  // Mock implementation for Phase 1
-  return {
-    token: 'mock-token',
-  }
 }
 
 /**
@@ -428,75 +279,57 @@ export const createVersion = async (
     commit_message?: string | null
   },
 ): Promise<Version> => {
-  return retryOnSqliteBusy(async () => {
-    const { taskId, versionType, asset_content_hash, commit_message } = args
-    const db = getDB()
-    const generator = getOperationTraceIdGenerator() // Defaults to resetting context
-    const newDbVersionId = generator.generate()
-    const timestamp = getTimestampFromTraceId(newDbVersionId)
+  const { taskId, versionType, asset_content_hash, commit_message } = args
+  const generator = getOperationTraceIdGenerator()
+  const newDbVersionId = generator.generate()
+  const timestamp = getTimestampFromTraceId(newDbVersionId)
 
-    let versionTypeTag: string
-    if (typeof versionType === 'string') {
-      versionTypeTag = versionType
-    }
-    else {
-      versionTypeTag = versionType as string
-    }
+  const versionTypeTag: string = typeof versionType === 'string'
+    ? versionType
+    : versionType as string
 
-    return new Promise<Version>((resolve, reject) => {
-      db.run(
+  return withTransaction('createVersion', async (ctx) => {
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
         `INSERT INTO Versions (
          version_id, task_id, version_type_tag, asset_content_hash,
          parent_version_id, timestamp_created, user_given_tag, commit_message,
          executed_def_version_id
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          newDbVersionId,
-          taskId,
-          versionTypeTag,
-          asset_content_hash,
-          null,
-          timestamp,
-          null,
-          commit_message,
-          null,
-        ],
-        function (err) {
-          if (err) {
-            console.error('Error creating version:', err)
-            return reject(err)
-          }
-          db.get(
-            `SELECT version_id, task_id, version_type_tag, asset_content_hash, parent_version_id,
-                  timestamp_created, user_given_tag, commit_message, executed_def_version_id
-           FROM Versions WHERE version_id = ?`,
-            [newDbVersionId],
-            (fetchErr, row: any) => {
-              if (fetchErr) {
-                console.error('Error fetching created version:', fetchErr)
-                return reject(fetchErr)
-              }
-              if (row) {
-                resolve({
-                  id: row.version_id,
-                  taskId: row.task_id,
-                  type: row.version_type_tag as VersionType,
-                  asset_content_hash: row.asset_content_hash,
-                  parent_version_id: row.parent_version_id,
-                  executed_def_version_id: row.executed_def_version_id,
-                  timestamp_created: row.timestamp_created,
-                  user_given_tag: row.user_given_tag,
-                  commit_message: row.commit_message,
-                })
-              }
-              else {
-                reject(new Error('Failed to fetch version after creation.'))
-              }
-            },
-          )
+        [newDbVersionId, taskId, versionTypeTag, asset_content_hash,
+          null, timestamp, null, commit_message, null],
+        (err) => {
+          if (err) reject(err)
+          else resolve()
         },
       )
     })
+
+    const row: any = await new Promise((resolve, reject) => {
+      ctx.db.get(
+        `SELECT version_id, task_id, version_type_tag, asset_content_hash, parent_version_id,
+                timestamp_created, user_given_tag, commit_message, executed_def_version_id
+         FROM Versions WHERE version_id = ?`,
+        [newDbVersionId],
+        (err, r) => {
+          if (err) reject(err)
+          else if (!r) reject(new Error('Failed to fetch version after creation.'))
+          else resolve(r)
+        },
+      )
+    })
+
+    return {
+      id: row.version_id,
+      taskId: row.task_id,
+      type: row.version_type_tag as VersionType,
+      asset_content_hash: row.asset_content_hash,
+      parent_version_id: row.parent_version_id,
+      executed_def_version_id: row.executed_def_version_id,
+      timestamp_created: row.timestamp_created,
+      user_given_tag: row.user_given_tag,
+      commit_message: row.commit_message,
+    }
   })
 }
 
@@ -508,221 +341,74 @@ export const requestExecution = async (
   _parent: unknown,
   args: { actionId: ActionId, input: DictAsset },
 ): Promise<TraceId> => {
-  // Returns Handle ID
   const { actionId, input } = args
   const db = getDB()
-  const generator = getOperationTraceIdGenerator() // Defaults to resetting context
+  const generator = getOperationTraceIdGenerator()
 
-  // Generate Handle ID (always new)
   const handleId = generator.generate()
   const timestamp = getTimestampFromTraceId(handleId)
 
-  // Store the input object to get its AssetId
   const inputAssetId = await store(input)
 
-  // Check if a task with the same inputs already exists
+  // Pre-reads (outside serializer)
   const existingTaskId = await findExistingTask(db, actionId, inputAssetId)
   const workflowInstanceTaskId = existingTaskId || generator.generate()
 
-  return new Promise<TraceId>((resolve, reject) => {
-    // Check if this is a system action or user-defined action
-    if (isSystemAction(actionId)) {
-      // System actions can be executed directly as single-node workflows
-      db.serialize(() => {
-        let startedTransaction = true
-        db.run('BEGIN TRANSACTION;', (beginErr) => {
-          if (beginErr) {
-            if (
-              beginErr.message.includes(
-                'cannot start a transaction within a transaction',
-              )
-            ) {
-              console.log(
-                'requestExecution: Using existing transaction for system action',
-              )
-              startedTransaction = false
-            }
-            else {
-              return reject(beginErr)
-            }
-          }
-
-          // Create ExecutionHandle mapping
-          db.run(
-            `INSERT INTO ExecutionHandles (handle_id, task_id, created_at, created_by, description)
-           VALUES (?, ?, ?, ?, ?)`,
-            [
-              handleId,
-              workflowInstanceTaskId,
-              timestamp,
-              'system',
-              `Execution of ${actionId}`,
-            ],
-            function (handleErr) {
-              if (handleErr) {
-                if (startedTransaction) db.run('ROLLBACK;')
-                return reject(
-                  new Error(
-                    `Failed to create execution handle: ${handleErr.message}`,
-                  ),
-                )
-              }
-
-              // If task already exists, skip creation and just commit
-              if (existingTaskId) {
-                console.log(
-                  `ℹ️  Reusing existing task: ${existingTaskId} for action=${actionId}`,
-                )
-                if (startedTransaction) {
-                  db.run('COMMIT;', (commitErr) => {
-                    if (commitErr) return reject(commitErr)
-                    resolve(handleId)
-                  })
-                }
-                else {
-                  resolve(handleId)
-                }
-                return
-              }
-
-              // Create WI Task using helper function (only if new)
-              createTaskWithExecutionStateInTransaction(
-                db,
-                workflowInstanceTaskId,
-                actionId,
-                inputAssetId,
-                `Execution of ${actionId}`,
-                `Execution of system action ${actionId}`,
-                timestamp,
-              )
-                .then(() => {
-                  if (startedTransaction) {
-                    db.run('COMMIT;', (commitErr) => {
-                      if (commitErr) return reject(commitErr)
-                      resolve(handleId)
-                    })
-                  }
-                  else {
-                    resolve(handleId)
-                  }
-                })
-                .catch((taskErr) => {
-                  if (startedTransaction) db.run('ROLLBACK;')
-                  reject(taskErr)
-                })
-            },
-          )
-        }) // Close db.run("BEGIN TRANSACTION;") callback
-      })
-    }
-    else {
-      // For user-defined actions, check if it has a workflow definition
+  // For user-defined actions, check if it has a workflow definition
+  let taskDescription = `Execution of ${actionId}`
+  if (!isSystemAction(actionId)) {
+    const actionDefTaskRow = await new Promise<TaskRow | undefined>((resolve, reject) => {
       db.get<TaskRow>(
         `SELECT current_version_id FROM Tasks WHERE task_id = ?`,
         [actionId],
-        (err, actionDefTaskRow) => {
-          if (err)
-            return reject(
-              new Error(
-                `Failed to fetch action definition task ${actionId}: ${err.message}`,
-              ),
-            )
-
-          // Allow execution even if current_version_id is empty (normal compute actions)
-          const isWorkflowAction
-            = actionDefTaskRow && actionDefTaskRow.current_version_id
-
-          db.serialize(() => {
-            let startedTransaction = true
-            db.run('BEGIN TRANSACTION;', (beginErr) => {
-              if (beginErr) {
-                if (
-                  beginErr.message.includes(
-                    'cannot start a transaction within a transaction',
-                  )
-                ) {
-                  console.log(
-                    'requestExecution: Using existing transaction for user action',
-                  )
-                  startedTransaction = false
-                }
-                else {
-                  return reject(beginErr)
-                }
-              }
-
-              // Create ExecutionHandle mapping
-              db.run(
-                `INSERT INTO ExecutionHandles (handle_id, task_id, created_at, created_by, description)
-               VALUES (?, ?, ?, ?, ?)`,
-                [
-                  handleId,
-                  workflowInstanceTaskId,
-                  timestamp,
-                  'system',
-                  `Execution of ${actionId}`,
-                ],
-                function (handleErr) {
-                  if (handleErr) {
-                    if (startedTransaction) db.run('ROLLBACK;')
-                    return reject(
-                      new Error(
-                        `Failed to create execution handle: ${handleErr.message}`,
-                      ),
-                    )
-                  }
-
-                  // If task already exists, skip creation and just commit
-                  if (existingTaskId) {
-                    console.log(
-                      `ℹ️  Reusing existing task: ${existingTaskId} for action=${actionId}`,
-                    )
-                    if (startedTransaction) {
-                      db.run('COMMIT;', (commitErr) => {
-                        if (commitErr) return reject(commitErr)
-                        resolve(handleId)
-                      })
-                    }
-                    else {
-                      resolve(handleId)
-                    }
-                    return
-                  }
-
-                  // Create WI Task using helper function (only if new)
-                  createTaskWithExecutionStateInTransaction(
-                    db,
-                    workflowInstanceTaskId,
-                    actionId,
-                    inputAssetId,
-                    `Execution of ${actionId}`,
-                    isWorkflowAction
-                      ? `Workflow execution of ${actionId}`
-                      : `Compute execution of ${actionId}`,
-                    timestamp,
-                  )
-                    .then(() => {
-                      if (startedTransaction) {
-                        db.run('COMMIT;', (commitErr) => {
-                          if (commitErr) return reject(commitErr)
-                          resolve(handleId)
-                        })
-                      }
-                      else {
-                        resolve(handleId)
-                      }
-                    })
-                    .catch((taskErr) => {
-                      if (startedTransaction) db.run('ROLLBACK;')
-                      reject(taskErr)
-                    })
-                },
-              )
-            }) // Close db.run("BEGIN TRANSACTION;") callback
-          })
+        (err, row) => {
+          if (err) reject(new Error(`Failed to fetch action definition task ${actionId}: ${err.message}`))
+          else resolve(row)
         },
       )
+    })
+    const isWorkflowAction = actionDefTaskRow && actionDefTaskRow.current_version_id
+    taskDescription = isWorkflowAction
+      ? `Workflow execution of ${actionId}`
+      : `Compute execution of ${actionId}`
+  }
+  else {
+    taskDescription = `Execution of system action ${actionId}`
+  }
+
+  // All writes in a single serialized transaction
+  return withTransaction('requestExecution', async (ctx) => {
+    // Create ExecutionHandle mapping
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT INTO ExecutionHandles (handle_id, task_id, created_at, created_by, description)
+         VALUES (?, ?, ?, ?, ?)`,
+        [handleId, workflowInstanceTaskId, timestamp, 'system', `Execution of ${actionId}`],
+        (err) => {
+          if (err) reject(new Error(`Failed to create execution handle: ${err.message}`))
+          else resolve()
+        },
+      )
+    })
+
+    // If task already exists, skip creation
+    if (existingTaskId) {
+      console.log(`ℹ️  Reusing existing task: ${existingTaskId} for action=${actionId}`)
+      return handleId
     }
+
+    // Create WI Task + TaskExecutionState
+    await createTaskWithExecutionStateInTransaction(
+      ctx.db,
+      workflowInstanceTaskId,
+      actionId,
+      inputAssetId,
+      `Execution of ${actionId}`,
+      taskDescription,
+      timestamp,
+    )
+
+    return handleId
   })
 }
 
@@ -731,132 +417,65 @@ export const requestWorkflowRevision = async (
   _parent: unknown,
   args: { actionId: TraceId, input: DictAsset },
 ): Promise<WorkflowRevision> => {
-  // Return non-nullable
-  const { actionId, input } = args // input is a JS object from DictJSONAssetScalar
+  const { actionId, input } = args
   const db = getDB()
-  const generator = getOperationTraceIdGenerator() // Defaults to resetting context
+  const generator = getOperationTraceIdGenerator()
 
-  // Store the input object to get its CompoundAssetId
   const inputAssetId = await store(input)
 
   const workflowInstanceTaskId = generator.generate()
-  const newRevisionId = generator.generate() // Share same operation context
+  const newRevisionId = generator.generate()
   const timestamp = getTimestampFromTraceId(newRevisionId)
 
-  return new Promise<WorkflowRevision>((resolve, reject) => {
-    // Corrected internal Promise type
+  // Pre-read: get executed definition version (read-only, outside serializer)
+  const actionDefTaskRow = await new Promise<TaskRow | undefined>((resolve, reject) => {
     db.get<TaskRow>(
       `SELECT current_version_id FROM Tasks WHERE task_id = ?`,
-      [actionId], // This is the ID of the Task that IS the workflow definition
-      (err, actionDefTaskRow) => {
-        if (err)
-          return reject(
-            new Error(
-              `Failed to fetch action definition task ${actionId}: ${err.message}`,
-            ),
-          )
-        if (!actionDefTaskRow || !actionDefTaskRow.current_version_id) {
-          return reject(
-            new Error(
-              `Action definition task ${actionId} not found or has no current_version_id.`,
-            ),
-          )
-        }
-        const executedDefVersionId
-          = actionDefTaskRow.current_version_id as TraceId
-
-        db.serialize(() => {
-          let startedTransaction = true
-          db.run('BEGIN TRANSACTION;', (beginErr) => {
-            if (beginErr) {
-              if (
-                beginErr.message.includes(
-                  'cannot start a transaction within a transaction',
-                )
-              ) {
-                console.log(
-                  'requestWorkflowRevision: Using existing transaction',
-                )
-                startedTransaction = false
-              }
-              else {
-                return reject(beginErr)
-              }
-            }
-
-            db.run(
-              `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, timestamp_created, current_version_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              // Use inputAssetId for inputs_content_hash
-              [
-                workflowInstanceTaskId,
-                default_scope_id,
-                actionId,
-                inputAssetId,
-                `Execution of ${actionId}`,
-                timestamp,
-                newRevisionId,
-              ],
-              function (taskInsertErr) {
-                if (taskInsertErr) {
-                  if (startedTransaction) db.run('ROLLBACK;')
-                  return reject(
-                    new Error(
-                      `Failed to create WI task: ${taskInsertErr.message}`,
-                    ),
-                  )
-                }
-
-                db.run(
-                  `INSERT INTO Versions (version_id, task_id, version_type_tag, executed_def_version_id, timestamp_created, asset_content_hash, parent_version_id)
-                 VALUES (?, ?, 'REVISION', ?, ?, ?, ?)`,
-                  [
-                    newRevisionId,
-                    workflowInstanceTaskId,
-                    executedDefVersionId,
-                    timestamp,
-                    null,
-                    null,
-                  ],
-                  function (versionInsertErr) {
-                    if (versionInsertErr) {
-                      if (startedTransaction) db.run('ROLLBACK;')
-                      return reject(
-                        new Error(
-                          `Failed to create revision version: ${versionInsertErr.message}`,
-                        ),
-                      )
-                    }
-
-                    // Note: Node initialization logic should be handled by the Workflow Engine
-                    // For Phase 1, returning empty nodes array
-                    if (startedTransaction) {
-                      db.run('COMMIT;', (commitErr) => {
-                        if (commitErr) return reject(commitErr)
-                        resolve({
-                          id: newRevisionId,
-                          status: 'INITIALIZED',
-                          createdAt: timestamp,
-                          nodes: [], // Empty for now - should be populated by Engine
-                        })
-                      })
-                    }
-                    else {
-                      resolve({
-                        id: newRevisionId,
-                        status: 'INITIALIZED',
-                        createdAt: timestamp,
-                        nodes: [], // Empty for now - should be populated by Engine
-                      })
-                    }
-                  },
-                )
-              },
-            )
-          }) // Close db.run("BEGIN TRANSACTION;") callback
-        })
+      [actionId],
+      (err, row) => {
+        if (err) reject(new Error(`Failed to fetch action definition task ${actionId}: ${err.message}`))
+        else resolve(row)
       },
     )
+  })
+
+  if (!actionDefTaskRow || !actionDefTaskRow.current_version_id) {
+    throw new Error(`Action definition task ${actionId} not found or has no current_version_id.`)
+  }
+  const executedDefVersionId = actionDefTaskRow.current_version_id as TraceId
+
+  return withTransaction('requestWorkflowRevision', async (ctx) => {
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, timestamp_created, current_version_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [workflowInstanceTaskId, default_scope_id, actionId, inputAssetId,
+          `Execution of ${actionId}`, timestamp, newRevisionId],
+        (err) => {
+          if (err) reject(new Error(`Failed to create WI task: ${err.message}`))
+          else resolve()
+        },
+      )
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT INTO Versions (version_id, task_id, version_type_tag, executed_def_version_id, timestamp_created, asset_content_hash, parent_version_id)
+         VALUES (?, ?, 'REVISION', ?, ?, ?, ?)`,
+        [newRevisionId, workflowInstanceTaskId, executedDefVersionId, timestamp, null, null],
+        (err) => {
+          if (err) reject(new Error(`Failed to create revision version: ${err.message}`))
+          else resolve()
+        },
+      )
+    })
+
+    return {
+      id: newRevisionId,
+      status: 'INITIALIZED',
+      createdAt: timestamp,
+      nodes: [],
+    }
   })
 }
 
@@ -893,96 +512,76 @@ export const requestNodeRerun = async (
     const { wiTaskId, currentRevisionId }
       = await DatabaseQueries.getWorkflowTaskFromHandle(handleId)
 
-    // 3. Duplicate workflow revision node states (non-transactional)
-    const newRevisionId = generator.generate()
-    const timestamp = getTimestampFromTraceId(newRevisionId)
-    const ctx = { db, transactionId: 'requestNodeRerun' }
-
-    await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
-      parentRevisionId: currentRevisionId,
-      newRevisionId,
-    })
-
-    console.log(
-      `✅ Duplicated node states: ${currentRevisionId} → ${newRevisionId}`,
-    )
-
-    // 4. Find the required_task_id for this node
+    // 3. Find the required_task_id for this node (read-only, outside transaction)
     const defaultContext = await getDefaultContextAssetId()
     const contextHash = contextAssetHash || defaultContext
 
-    const nodeStateRow: any = await new Promise((resolve, reject) => {
-      db.get(
-        `SELECT required_task_id FROM WorkflowRevisionNodeStates
-         WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
-        [newRevisionId, nodeId, contextHash],
-        (err, row) => {
-          if (err)
-            return reject(
-              new Error(`Failed to fetch node state: ${err.message}`),
-            )
-          if (!row)
-            return reject(
-              new Error(
-                `Node ${nodeId} not found in workflow revision ${newRevisionId}`,
-              ),
-            )
-          resolve(row)
-        },
+    // 4-5. All writes serialized to prevent nested transaction conflicts
+    await serializeMutation('requestNodeRerun', async () => {
+      const newRevisionId = generator.generate()
+      const timestamp = getTimestampFromTraceId(newRevisionId)
+      const ctx = { db, transactionId: 'requestNodeRerun' }
+
+      // Non-transactional state copy (but serialized)
+      await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
+        parentRevisionId: currentRevisionId,
+        newRevisionId,
+      })
+
+      console.log(
+        `✅ Duplicated node states: ${currentRevisionId} → ${newRevisionId}`,
       )
-    })
 
-    const requiredTaskId = nodeStateRow.required_task_id
-    if (!requiredTaskId) {
-      throw new Error(`Node ${nodeId} has no required_task_id`)
-    }
+      const nodeStateRow: any = await new Promise((resolve, reject) => {
+        db.get(
+          `SELECT required_task_id FROM WorkflowRevisionNodeStates
+           WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
+          [newRevisionId, nodeId, contextHash],
+          (err, row) => {
+            if (err)
+              return reject(
+                new Error(`Failed to fetch node state: ${err.message}`),
+              )
+            if (!row)
+              return reject(
+                new Error(
+                  `Node ${nodeId} not found in workflow revision ${newRevisionId}`,
+                ),
+              )
+            resolve(row)
+          },
+        )
+      })
 
-    // 5. Finalize revision fork + refresh task in single transaction
-    await new Promise<void>((resolve, reject) => {
-      db.serialize(() => {
-        db.run('BEGIN IMMEDIATE;', (beginErr) => {
-          if (beginErr) return reject(beginErr)
+      const requiredTaskId = nodeStateRow.required_task_id
+      if (!requiredTaskId) {
+        throw new Error(`Node ${nodeId} has no required_task_id`)
+      }
 
-          // Part A: Finalize revision fork
-          InternalDatabaseOperations.finalizeRevisionFork(ctx, {
-            taskId: wiTaskId,
-            parentRevisionId: currentRevisionId,
-            newRevisionId,
-            timestamp,
-            triggerReason: commitMessage || `Rerun request for node ${nodeId}`,
-          })
-            .then(() => {
-              // Part B: Refresh task to make it PENDING again and clear version for discoverability
-              return executeRefreshTaskInternal(ctx, requiredTaskId, {
-                clearVersion: true,
-              })
-            })
-            .then(() => {
-              // Part C: Update node state to RUNNING (waiting for worker)
-              return InternalDatabaseOperations.updateNodeRuntimeStatus(ctx, {
-                workflowRevisionId: newRevisionId,
-                nodeId: nodeId,
-                contextAssetHash: contextHash,
-                runtimeStatus: 'RUNNING',
-              })
-            })
-            .then(() => {
-              // Commit transaction
-              db.run('COMMIT;', (commitErr) => {
-                if (commitErr) return reject(commitErr)
-                resolve()
-              })
-            })
-            .catch((error) => {
-              db.run('ROLLBACK;', () => reject(error))
-            })
+      // Finalize revision fork + refresh task in single transaction
+      await runInTransaction(db, 'requestNodeRerun_txn', async (txCtx) => {
+        await InternalDatabaseOperations.finalizeRevisionFork(txCtx, {
+          taskId: wiTaskId,
+          parentRevisionId: currentRevisionId,
+          newRevisionId,
+          timestamp,
+          triggerReason: commitMessage || `Rerun request for node ${nodeId}`,
+        })
+        await executeRefreshTaskInternal(txCtx, requiredTaskId, {
+          clearVersion: true,
+        })
+        await InternalDatabaseOperations.updateNodeRuntimeStatus(txCtx, {
+          workflowRevisionId: newRevisionId,
+          nodeId: nodeId,
+          contextAssetHash: contextHash,
+          runtimeStatus: 'RUNNING',
         })
       })
-    })
 
-    console.log(
-      `✅ Forked revision and refreshed task ${requiredTaskId} for node ${nodeId} rerun`,
-    )
+      console.log(
+        `✅ Forked revision and refreshed task ${requiredTaskId} for node ${nodeId} rerun`,
+      )
+    })
 
     return jobId
   }
@@ -1039,154 +638,111 @@ export const requestStaleNodesUpdate = async (
     }
     const outputAssetId = await store(outputAsset as DictAsset)
 
-    // Step 5: Create Job Task (non-transactional)
-    await new Promise<void>((resolve, reject) => {
-      db.run(
-        `INSERT INTO Tasks (
-          task_id, scope_id, action_id, inputs_content_hash,
-          name, description, timestamp_created
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          jobTaskId,
-          default_scope_id,
-          actionIdToDbFormat(SYSTEM_ACTIONS.CORE_ORCHESTRATE_UPDATE_STALE),
-          commandAssetId,
-          'Update stale nodes',
-          `Update stale nodes in workflow ${wiTaskId}`,
-          jobTimestamp,
-        ],
-        (err) => {
-          if (err)
-            return reject(
-              new Error(`Failed to create job task: ${err.message}`),
-            )
-          resolve()
-        },
+    // Steps 5-11: All writes serialized
+    await serializeMutation('requestStaleNodesUpdate', async () => {
+      const ctx = { db, transactionId: 'requestStaleNodesUpdate' }
+
+      // Step 5: Create Job Task (non-transactional, but serialized)
+      await new Promise<void>((resolve, reject) => {
+        db.run(
+          `INSERT INTO Tasks (
+            task_id, scope_id, action_id, inputs_content_hash,
+            name, description, timestamp_created
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            jobTaskId,
+            default_scope_id,
+            actionIdToDbFormat(SYSTEM_ACTIONS.CORE_ORCHESTRATE_UPDATE_STALE),
+            commandAssetId,
+            'Update stale nodes',
+            `Update stale nodes in workflow ${wiTaskId}`,
+            jobTimestamp,
+          ],
+          (err) => {
+            if (err)
+              return reject(
+                new Error(`Failed to create job task: ${err.message}`),
+              )
+            resolve()
+          },
+        )
+      })
+
+      // Step 6: Duplicate workflow revision node states (non-transactional, but serialized)
+      await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
+        parentRevisionId: currentRevisionId,
+        newRevisionId,
+      })
+
+      console.log(
+        `✅ Duplicated node states: ${currentRevisionId} → ${newRevisionId}`,
       )
-    })
 
-    // Step 6: Duplicate workflow revision node states (non-transactional)
-    const ctx = { db, transactionId: 'requestStaleNodesUpdate' }
-    await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
-      parentRevisionId: currentRevisionId,
-      newRevisionId,
-    })
-
-    console.log(
-      `✅ Duplicated node states: ${currentRevisionId} → ${newRevisionId}`,
-    )
-
-    // Step 8-9-10-11: Atomic transaction for OUTPUT, job task update, revision finalization, and event
-    await new Promise<void>((resolve, reject) => {
-      db.serialize(() => {
-        db.run('BEGIN TRANSACTION;', (beginErr) => {
-          if (beginErr) return reject(beginErr)
-
-          // Step 8: Create OUTPUT version for Job Task
-          db.run(
+      // Steps 8-11: Atomic transaction for OUTPUT, job task update, revision finalization, and event
+      await runInTransaction(db, 'requestStaleNodesUpdate_txn', async (txCtx) => {
+        // Step 8: Create OUTPUT version for Job Task
+        await new Promise<void>((resolve, reject) => {
+          txCtx.db.run(
             `INSERT INTO Versions (
               version_id, task_id, version_type_tag, asset_content_hash,
               parent_version_id, timestamp_created, commit_message
             ) VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-            [
-              outputVersionId,
-              jobTaskId,
-              'OUTPUT',
-              outputAssetId,
-              outputTimestamp,
-              'Revision created',
-            ],
-            (err8) => {
-              if (err8) {
-                db.run('ROLLBACK;')
-                return reject(
-                  new Error(`Failed to create output version: ${err8.message}`),
-                )
-              }
-
-              // Step 9: Update Job Task's current_version_id
-              db.run(
-                `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
-                [outputVersionId, jobTaskId],
-                (err9) => {
-                  if (err9) {
-                    db.run('ROLLBACK;')
-                    return reject(
-                      new Error(`Failed to update job task: ${err9.message}`),
-                    )
-                  }
-
-                  // Step 10: Finalize revision fork (create Versions and update Tasks.current_version_id)
-                  InternalDatabaseOperations.finalizeRevisionFork(ctx, {
-                    taskId: wiTaskId,
-                    parentRevisionId: currentRevisionId,
-                    newRevisionId,
-                    timestamp: revisionTimestamp,
-                    triggerReason: 'Update stale nodes',
-                  })
-                    .then(() => {
-                      // Step 11: Emit special event for stale update
-                      const eventId = generator.generate()
-                      const eventTimestamp = getTimestampFromTraceId(eventId)
-                      const eventPayload = JSON.stringify({
-                        task_id: jobTaskId,
-                        version_id: outputVersionId,
-                        new_revision_id: newRevisionId,
-                        wi_task_id: wiTaskId,
-                        stale_node_ids: nodeIds || null,
-                      })
-
-                      db.run(
-                        `INSERT INTO EventLog (
-                          event_id, topic, payload, timestamp_created
-                        ) VALUES (?, ?, ?, ?)`,
-                        [
-                          eventId,
-                          'stale_update_revision_created',
-                          eventPayload,
-                          eventTimestamp,
-                        ],
-                        (err11) => {
-                          if (err11) {
-                            db.run('ROLLBACK;')
-                            return reject(
-                              new Error(
-                                `Failed to emit event: ${err11.message}`,
-                              ),
-                            )
-                          }
-
-                          // Commit transaction
-                          db.run('COMMIT;', (err12) => {
-                            if (err12)
-                              return reject(
-                                new Error(`Failed to commit: ${err12.message}`),
-                              )
-
-                            console.log(
-                              `✅ Stale update job completed atomically`,
-                            )
-                            console.log(`📸 New revision: ${newRevisionId}`)
-                            console.log(`📋 Job ID: ${jobTaskId}`)
-
-                            resolve()
-                          })
-                        },
-                      )
-                    })
-                    .catch((err10) => {
-                      db.run('ROLLBACK;')
-                      return reject(
-                        new Error(
-                          `Failed to finalize revision fork: ${err10.message}`,
-                        ),
-                      )
-                    })
-                },
-              )
+            [outputVersionId, jobTaskId, 'OUTPUT', outputAssetId, outputTimestamp, 'Revision created'],
+            (err) => {
+              if (err) reject(new Error(`Failed to create output version: ${err.message}`))
+              else resolve()
             },
           )
         })
+
+        // Step 9: Update Job Task's current_version_id
+        await new Promise<void>((resolve, reject) => {
+          txCtx.db.run(
+            `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
+            [outputVersionId, jobTaskId],
+            (err) => {
+              if (err) reject(new Error(`Failed to update job task: ${err.message}`))
+              else resolve()
+            },
+          )
+        })
+
+        // Step 10: Finalize revision fork
+        await InternalDatabaseOperations.finalizeRevisionFork(txCtx, {
+          taskId: wiTaskId,
+          parentRevisionId: currentRevisionId,
+          newRevisionId,
+          timestamp: revisionTimestamp,
+          triggerReason: 'Update stale nodes',
+        })
+
+        // Step 11: Emit special event for stale update
+        const eventId = generator.generate()
+        const eventTimestamp = getTimestampFromTraceId(eventId)
+        const eventPayload = JSON.stringify({
+          task_id: jobTaskId,
+          version_id: outputVersionId,
+          new_revision_id: newRevisionId,
+          wi_task_id: wiTaskId,
+          stale_node_ids: nodeIds || null,
+        })
+
+        await new Promise<void>((resolve, reject) => {
+          txCtx.db.run(
+            `INSERT INTO EventLog (
+              event_id, topic, payload, timestamp_created
+            ) VALUES (?, ?, ?, ?)`,
+            [eventId, 'stale_update_revision_created', eventPayload, eventTimestamp],
+            (err) => {
+              if (err) reject(new Error(`Failed to emit event: ${err.message}`))
+              else resolve()
+            },
+          )
+        })
+
+        console.log(`✅ Stale update job completed atomically`)
+        console.log(`📸 New revision: ${newRevisionId}`)
+        console.log(`📋 Job ID: ${jobTaskId}`)
       })
     })
 
@@ -1227,73 +783,81 @@ export const submitPlayerInput = async (
   const jobId = generator.generate()
 
   try {
-    // 1-2. Get workflow task and current revision from handle
+    // 1-2. Get workflow task and current revision from handle (read-only, outside serializer)
     const { wiTaskId, currentRevisionId }
       = await DatabaseQueries.getWorkflowTaskFromHandle(handleId)
-
-    // 3. Fork revision to preserve history
-    const newRevisionId = generator.generate()
-    const timestamp = getTimestampFromTraceId(newRevisionId)
-
-    await ExternalDatabaseMutations.forkRevision({
-      taskId: wiTaskId,
-      parentRevisionId: currentRevisionId,
-      newRevisionId,
-      timestamp,
-      triggerReason: `Player input for node ${nodeId}`,
-    })
-
-    console.log(
-      `🔀 Forked revision for submitPlayerInput: ${currentRevisionId} → ${newRevisionId}`,
-    )
-
-    // 4. Get node's task ID from WorkflowRevisionNodeStates
     const defaultContext = await getDefaultContextAssetId()
-    const nodeState = await new Promise<any>((resolve, reject) => {
-      db.get(
-        `SELECT required_task_id FROM WorkflowRevisionNodeStates
-         WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
-        [newRevisionId, nodeId, contextAssetHash || defaultContext],
-        (err, row) => {
-          if (err) return reject(err)
-          resolve(row)
-        },
+
+    // 3-6. All writes serialized (inlines fork logic to avoid deadlock)
+    await serializeMutation('submitPlayerInput', async () => {
+      const newRevisionId = generator.generate()
+      const timestamp = getTimestampFromTraceId(newRevisionId)
+      const ctx = { db, transactionId: 'submitPlayerInput' }
+
+      // Non-transactional state copy (but serialized)
+      await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
+        parentRevisionId: currentRevisionId,
+        newRevisionId,
+      })
+
+      console.log(
+        `🔀 Forked revision for submitPlayerInput: ${currentRevisionId} → ${newRevisionId}`,
       )
+
+      // Read node state (within serializer)
+      const nodeState = await new Promise<any>((resolve, reject) => {
+        db.get(
+          `SELECT required_task_id FROM WorkflowRevisionNodeStates
+           WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
+          [newRevisionId, nodeId, contextAssetHash || defaultContext],
+          (err, row) => {
+            if (err) return reject(err)
+            resolve(row)
+          },
+        )
+      })
+
+      if (!nodeState?.required_task_id) {
+        throw new Error(`Node ${nodeId} has no task assigned`)
+      }
+
+      // Transactional: finalize fork + update node + emit event
+      await runInTransaction(db, 'submitPlayerInput_txn', async (txCtx) => {
+        await InternalDatabaseOperations.finalizeRevisionFork(txCtx, {
+          taskId: wiTaskId,
+          parentRevisionId: currentRevisionId,
+          newRevisionId,
+          timestamp,
+          triggerReason: `Player input for node ${nodeId}`,
+        })
+
+        await InternalDatabaseOperations.updateNodeRuntimeStatus(txCtx, {
+          workflowRevisionId: newRevisionId,
+          nodeId: nodeId,
+          contextAssetHash: contextAssetHash || defaultContext,
+          runtimeStatus: 'IDLE',
+        })
+
+        console.log(`✅ Updated node ${nodeId} to IDLE state after player input`)
+
+        const eventProducer = new SqliteEventProducer()
+        await eventProducer.produce(
+          'task_player_submitted',
+          {
+            task_id: nodeState.required_task_id,
+            workflow_task_id: wiTaskId,
+            workflow_revision_id: newRevisionId,
+            node_id: nodeId,
+            context_asset_hash: contextAssetHash || defaultContext,
+            output_asset_id: outputAssetId,
+            commit_message: commitMessage || `Player input for node ${nodeId}`,
+          },
+          txCtx.db,
+        )
+
+        console.log(`✅ Emitted task_player_submitted event for node ${nodeId}`)
+      })
     })
-
-    if (!nodeState?.required_task_id) {
-      throw new Error(`Node ${nodeId} has no task assigned`)
-    }
-
-    // 5. Update node state to IDLE (player provided result, task finished)
-    const ctx = { db, transactionId: 'submitPlayerInput' }
-    await InternalDatabaseOperations.updateNodeRuntimeStatus(ctx, {
-      workflowRevisionId: newRevisionId,
-      nodeId: nodeId,
-      contextAssetHash: contextAssetHash || defaultContext,
-      runtimeStatus: 'IDLE',
-    })
-
-    console.log(`✅ Updated node ${nodeId} to IDLE state after player input`)
-
-    // 6. Emit task_player_submitted event to event bus
-    const eventProducer = new SqliteEventProducer()
-
-    await eventProducer.produce(
-      'task_player_submitted',
-      {
-        task_id: nodeState.required_task_id, // Node's computational task ID
-        workflow_task_id: wiTaskId, // Workflow instance task ID
-        workflow_revision_id: newRevisionId,
-        node_id: nodeId,
-        context_asset_hash: contextAssetHash || defaultContext,
-        output_asset_id: outputAssetId,
-        commit_message: commitMessage || `Player input for node ${nodeId}`,
-      },
-      db,
-    )
-
-    console.log(`✅ Emitted task_player_submitted event for node ${nodeId}`)
 
     return jobId
   }
@@ -1329,74 +893,82 @@ export const failPlayerTask = async (
   const jobId = generator.generate()
 
   try {
-    // 1-2. Get workflow task and current revision from handle
+    // 1-2. Get workflow task and current revision from handle (read-only, outside serializer)
     const { wiTaskId, currentRevisionId }
       = await DatabaseQueries.getWorkflowTaskFromHandle(handleId)
-
-    // 3. Fork revision to preserve history
-    const newRevisionId = generator.generate()
-    const timestamp = getTimestampFromTraceId(newRevisionId)
-
-    await ExternalDatabaseMutations.forkRevision({
-      taskId: wiTaskId,
-      parentRevisionId: currentRevisionId,
-      newRevisionId,
-      timestamp,
-      triggerReason: `Player task failed: ${reason}`,
-    })
-
-    console.log(
-      `🔀 Forked revision for failPlayerTask: ${currentRevisionId} → ${newRevisionId}`,
-    )
-
-    // 4. Get node's task ID from WorkflowRevisionNodeStates
     const defaultContext = await getDefaultContextAssetId()
-    const nodeState = await new Promise<any>((resolve, reject) => {
-      db.get(
-        `SELECT required_task_id FROM WorkflowRevisionNodeStates
-         WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
-        [newRevisionId, nodeId, contextAssetHash || defaultContext],
-        (err, row) => {
-          if (err) return reject(err)
-          resolve(row)
-        },
+
+    // 3-6. All writes serialized (inlines fork logic to avoid deadlock)
+    await serializeMutation('failPlayerTask', async () => {
+      const newRevisionId = generator.generate()
+      const timestamp = getTimestampFromTraceId(newRevisionId)
+      const ctx = { db, transactionId: 'failPlayerTask' }
+
+      // Non-transactional state copy (but serialized)
+      await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(ctx, {
+        parentRevisionId: currentRevisionId,
+        newRevisionId,
+      })
+
+      console.log(
+        `🔀 Forked revision for failPlayerTask: ${currentRevisionId} → ${newRevisionId}`,
       )
+
+      // Read node state (within serializer)
+      const nodeState = await new Promise<any>((resolve, reject) => {
+        db.get(
+          `SELECT required_task_id FROM WorkflowRevisionNodeStates
+           WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
+          [newRevisionId, nodeId, contextAssetHash || defaultContext],
+          (err, row) => {
+            if (err) return reject(err)
+            resolve(row)
+          },
+        )
+      })
+
+      if (!nodeState?.required_task_id) {
+        throw new Error(`Node ${nodeId} has no task assigned`)
+      }
+
+      // Transactional: finalize fork + update node + emit event
+      await runInTransaction(db, 'failPlayerTask_txn', async (txCtx) => {
+        await InternalDatabaseOperations.finalizeRevisionFork(txCtx, {
+          taskId: wiTaskId,
+          parentRevisionId: currentRevisionId,
+          newRevisionId,
+          timestamp,
+          triggerReason: `Player task failed: ${reason}`,
+        })
+
+        await InternalDatabaseOperations.updateNodeRuntimeStatus(txCtx, {
+          workflowRevisionId: newRevisionId,
+          nodeId: nodeId,
+          contextAssetHash: contextAssetHash || defaultContext,
+          runtimeStatus: 'FAILED',
+        })
+
+        console.log(
+          `✅ Updated node ${nodeId} to FAILED state after player failure`,
+        )
+
+        const eventProducer = new SqliteEventProducer()
+        await eventProducer.produce(
+          'task_player_failed',
+          {
+            task_id: nodeState.required_task_id,
+            workflow_task_id: wiTaskId,
+            workflow_revision_id: newRevisionId,
+            node_id: nodeId,
+            context_asset_hash: contextAssetHash || defaultContext,
+            reason: reason,
+          },
+          txCtx.db,
+        )
+
+        console.log(`✅ Emitted task_player_failed event for node ${nodeId}`)
+      })
     })
-
-    if (!nodeState?.required_task_id) {
-      throw new Error(`Node ${nodeId} has no task assigned`)
-    }
-
-    // 5. Update node state to FAILED (player marked task as failed)
-    const ctx = { db, transactionId: 'failPlayerTask' }
-    await InternalDatabaseOperations.updateNodeRuntimeStatus(ctx, {
-      workflowRevisionId: newRevisionId,
-      nodeId: nodeId,
-      contextAssetHash: contextAssetHash || defaultContext,
-      runtimeStatus: 'FAILED',
-    })
-
-    console.log(
-      `✅ Updated node ${nodeId} to FAILED state after player failure`,
-    )
-
-    // 6. Emit task_player_failed event to event bus
-    const eventProducer = new SqliteEventProducer()
-
-    await eventProducer.produce(
-      'task_player_failed',
-      {
-        task_id: nodeState.required_task_id, // Node's computational task ID
-        workflow_task_id: wiTaskId, // Workflow instance task ID
-        workflow_revision_id: newRevisionId,
-        node_id: nodeId,
-        context_asset_hash: contextAssetHash || defaultContext,
-        reason: reason,
-      },
-      db,
-    )
-
-    console.log(`✅ Emitted task_player_failed event for node ${nodeId}`)
 
     return jobId
   }
@@ -1446,6 +1018,7 @@ export const updateNodeStates = async (
       contextAssetHash: update.contextAssetHash || defaultContext,
       requiredTaskId: (update as any).requiredTaskId as TraceId | undefined,
       lastInputsHash: update.lastInputsHash as AssetId | undefined,
+      metaAssetHash: update.metaAssetHash as AssetId | undefined,
     }))
 
     console.log(`🔍 [RESOLVER] Transformed updates:`)
@@ -1479,43 +1052,32 @@ export const createAction = async (
   args: { name: string, description: string },
 ): Promise<Action> => {
   const { name, description } = args
-  const db = getDB()
-  const generator = getOperationTraceIdGenerator() // Defaults to resetting context
+  const generator = getOperationTraceIdGenerator()
 
   const actionTaskId = generator.generate()
   const timestamp = getTimestampFromTraceId(actionTaskId)
 
-  return new Promise<Action>((resolve, reject) => {
-    // Create an Action Definition Task with action_id = core:define_action system action TraceId
-    db.run(
-      `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, description, timestamp_created)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        actionTaskId,
-        default_scope_id,
-        actionIdToDbFormat(SYSTEM_ACTIONS.CORE_DEFINE_ACTION),
-        null,
-        name,
-        description,
-        timestamp,
-      ],
-      function (err) {
-        if (err) {
-          return reject(
-            new Error(`Failed to create action definition task: ${err.message}`),
-          )
-        }
+  return withTransaction('createAction', async (ctx) => {
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, description, timestamp_created)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [actionTaskId, default_scope_id, actionIdToDbFormat(SYSTEM_ACTIONS.CORE_DEFINE_ACTION),
+          null, name, description, timestamp],
+        (err) => {
+          if (err) reject(new Error(`Failed to create action definition task: ${err.message}`))
+          else resolve()
+        },
+      )
+    })
 
-        // Return an Action object (without actionId field)
-        resolve({
-          id: actionTaskId as ActionId,
-          name,
-          description,
-          currentVersion: null,
-          createdAt: timestamp,
-        })
-      },
-    )
+    return {
+      id: actionTaskId as ActionId,
+      name,
+      description,
+      currentVersion: null,
+      createdAt: timestamp,
+    }
   })
 }
 
@@ -1528,77 +1090,48 @@ export const createWorkflowDefinitionVersion = async (
   },
 ): Promise<Version> => {
   const { actionId, workflowDefinition, commitMessage } = args
-  const db = getDB()
   const generator = getOperationTraceIdGenerator()
 
-  // Store the workflow definition object to get its AssetId
   const workflowAssetId = await store(workflowDefinition)
 
   const versionId = generator.generate()
   const timestamp = getTimestampFromTraceId(versionId)
 
-  return new Promise<Version>((resolve, reject) => {
-    db.serialize(() => {
-      db.run('BEGIN TRANSACTION;', (beginErr) => {
-        if (beginErr) return reject(beginErr)
-      })
-
-      // Create the workflow definition version
-      db.run(
+  return withTransaction('createWorkflowDefinitionVersion', async (ctx) => {
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
         `INSERT INTO Versions (version_id, task_id, version_type_tag, asset_content_hash, timestamp_created, commit_message)
          VALUES (?, ?, 'WORKFLOW_DEFINITION', ?, ?, ?)`,
-        [
-          versionId,
-          actionId,
-          workflowAssetId,
-          timestamp,
-          commitMessage || 'Workflow definition created',
-        ],
-        function (versionErr) {
-          if (versionErr) {
-            db.run('ROLLBACK;')
-            return reject(
-              new Error(
-                `Failed to create workflow definition version: ${versionErr.message}`,
-              ),
-            )
-          }
-
-          // Update the Task's current_version_id to point to this new version
-          db.run(
-            `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
-            [versionId, actionId],
-            function (updateErr) {
-              if (updateErr) {
-                db.run('ROLLBACK;')
-                return reject(
-                  new Error(
-                    `Failed to update task current version: ${updateErr.message}`,
-                  ),
-                )
-              }
-
-              db.run('COMMIT;', (commitErr) => {
-                if (commitErr) return reject(commitErr)
-
-                resolve({
-                  id: versionId,
-                  taskId: actionId,
-                  type: VersionTypeEnum.WorkflowDefinition,
-                  asset_content_hash: workflowAssetId,
-                  parent_version_id: null,
-                  executed_def_version_id: null,
-                  timestamp_created: timestamp,
-                  user_given_tag: null,
-                  commit_message:
-                    commitMessage || 'Workflow definition created',
-                })
-              })
-            },
-          )
+        [versionId, actionId, workflowAssetId, timestamp, commitMessage || 'Workflow definition created'],
+        (err) => {
+          if (err) reject(new Error(`Failed to create workflow definition version: ${err.message}`))
+          else resolve()
         },
       )
     })
+
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
+        [versionId, actionId],
+        (err) => {
+          if (err) reject(new Error(`Failed to update task current version: ${err.message}`))
+          else resolve()
+        },
+      )
+    })
+
+    return {
+      id: versionId,
+      taskId: actionId,
+      type: VersionTypeEnum.WorkflowDefinition,
+      asset_content_hash: workflowAssetId,
+      parent_version_id: null,
+      executed_def_version_id: null,
+      timestamp_created: timestamp,
+      user_given_tag: null,
+      commit_message: commitMessage || 'Workflow definition created',
+    }
   })
 }
 
@@ -1858,53 +1391,23 @@ export const setMergeAccumulator = async (
     accumulatorData: DictAsset
   },
 ): Promise<boolean> => {
-  const {
-    pipelineId,
-    workflowRevisionId,
-    contextAssetHash,
-    nodeId,
-    accumulatorData,
-  } = args
+  const { pipelineId, workflowRevisionId, contextAssetHash, nodeId, accumulatorData } = args
 
-  return serializeMutation('setMergeAccumulator', async () => {
-    const db = getDB()
-
-    return new Promise<boolean>((resolve, reject) => {
-      db.serialize(() => {
-        db.run('BEGIN TRANSACTION', (err) => {
-          if (err) return reject(err)
-
-          const insertedJsonString = encodeToString(accumulatorData)
-
-          db.run(
-            `INSERT OR REPLACE INTO PipelineMergeAccumulator
-             (pipeline_id, workflow_revision_id, context_asset_hash, node_id, accumulator_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))`,
-            [
-              pipelineId,
-              workflowRevisionId,
-              contextAssetHash,
-              nodeId,
-              insertedJsonString,
-            ],
-            (err) => {
-              if (err) {
-                db.run('ROLLBACK')
-                return reject(err)
-              }
-
-              db.run('COMMIT', (err) => {
-                if (err) {
-                  db.run('ROLLBACK')
-                  return reject(err)
-                }
-                resolve(true)
-              })
-            },
-          )
-        })
-      })
+  return withTransaction('setMergeAccumulator', async (ctx) => {
+    const insertedJsonString = encodeToString(accumulatorData)
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT OR REPLACE INTO PipelineMergeAccumulator
+         (pipeline_id, workflow_revision_id, context_asset_hash, node_id, accumulator_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))`,
+        [pipelineId, workflowRevisionId, contextAssetHash, nodeId, insertedJsonString],
+        (err) => {
+          if (err) reject(err)
+          else resolve()
+        },
+      )
     })
+    return true
   })
 }
 
@@ -1924,81 +1427,44 @@ export const mergeMergeAccumulator = async (
     value: AssetValue
   },
 ): Promise<DictAsset> => {
-  const {
-    pipelineId,
-    workflowRevisionId,
-    contextAssetHash,
-    nodeId,
-    key,
-    value,
-  } = args
+  const { pipelineId, workflowRevisionId, contextAssetHash, nodeId, key, value } = args
 
-  return serializeMutation('mergeMergeAccumulator', async () => {
-    const db = getDB()
-
-    return new Promise<DictAsset>((resolve, reject) => {
-      db.serialize(() => {
-        db.run('BEGIN TRANSACTION', (err) => {
-          if (err) return reject(err)
-
-          // Read current accumulator
-          db.get(
-            `SELECT accumulator_json FROM PipelineMergeAccumulator
-             WHERE pipeline_id = ? AND workflow_revision_id = ? AND context_asset_hash = ? AND node_id = ?`,
-            [pipelineId, workflowRevisionId, contextAssetHash, nodeId],
-            (err, row: any) => {
-              if (err) {
-                db.run('ROLLBACK')
-                return reject(err)
-              }
-
-              try {
-                const current: DictAsset = row?.accumulator_json
-                  ? decodeFromString(row.accumulator_json) as DictAsset
-                  : {}
-
-                // Update with new key/value
-                current[key] = value
-
-                const mergedJsonString = encodeToString(current)
-
-                // Upsert back to database
-                db.run(
-                  `INSERT OR REPLACE INTO PipelineMergeAccumulator
-                   (pipeline_id, workflow_revision_id, context_asset_hash, node_id, accumulator_json, updated_at)
-                   VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))`,
-                  [
-                    pipelineId,
-                    workflowRevisionId,
-                    contextAssetHash,
-                    nodeId,
-                    mergedJsonString,
-                  ],
-                  (err) => {
-                    if (err) {
-                      db.run('ROLLBACK')
-                      return reject(err)
-                    }
-
-                    db.run('COMMIT', (err) => {
-                      if (err) {
-                        db.run('ROLLBACK')
-                        return reject(err)
-                      }
-                      resolve(decodeFromString(mergedJsonString) as DictAsset)
-                    })
-                  },
-                )
-              }
-              catch (parseErr) {
-                db.run('ROLLBACK')
-                reject(parseErr)
-              }
-            },
-          )
-        })
-      })
+  return withTransaction('mergeMergeAccumulator', async (ctx) => {
+    // Read current accumulator
+    const row: any = await new Promise((resolve, reject) => {
+      ctx.db.get(
+        `SELECT accumulator_json FROM PipelineMergeAccumulator
+         WHERE pipeline_id = ? AND workflow_revision_id = ? AND context_asset_hash = ? AND node_id = ?`,
+        [pipelineId, workflowRevisionId, contextAssetHash, nodeId],
+        (err, r) => {
+          if (err) reject(err)
+          else resolve(r)
+        },
+      )
     })
+
+    const current: DictAsset = row?.accumulator_json
+      ? decodeFromString(row.accumulator_json) as DictAsset
+      : {}
+
+    current[key] = value
+    const mergedJsonString = encodeToString(current)
+
+    // Upsert back to database
+    await new Promise<void>((resolve, reject) => {
+      ctx.db.run(
+        `INSERT OR REPLACE INTO PipelineMergeAccumulator
+         (pipeline_id, workflow_revision_id, context_asset_hash, node_id, accumulator_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))`,
+        [pipelineId, workflowRevisionId, contextAssetHash, nodeId, mergedJsonString],
+        (err) => {
+          if (err) reject(err)
+          else resolve()
+        },
+      )
+    })
+
+    return decodeFromString(mergedJsonString) as DictAsset
   })
 }
 

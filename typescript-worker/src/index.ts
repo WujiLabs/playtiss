@@ -13,12 +13,12 @@ import type { ActionId, DictAsset } from 'playtiss'
 import { isTraceId } from 'playtiss/types/trace_id'
 import { getWorkerConfig, validateConfig } from './config.js'
 import { createClient } from './graphql-client.js'
-import { mandatoryTaskRunner, taskRunner, type CallbackType } from './runner.js'
+import { executeSingleTask, runWorkerLoop, type CallbackType } from './runner.js'
 
 // Re-export types and classes for external use
 export { findAndLoadEnv, getWorkerConfig, validateConfig, type WorkerConfig } from './config.js'
 export { createClient, GraphQLClient } from './graphql-client.js'
-export { handleNewTask, mandatoryTaskRunner, TaskPool, taskRunner, type CallbackType, type RunnerContext } from './runner.js'
+export { executeTask, executeSingleTask, runWorkerLoop, type CallbackType, type RunnerContext } from './runner.js'
 export { RateLimitedTaskIterator, TaskIterator, type TaskInfo } from './task-iterator.js'
 
 /**
@@ -62,7 +62,7 @@ export class TypeScriptWorker {
     console.log(`Poll Interval: ${this.config.pollInterval}ms`)
 
     try {
-      await taskRunner(this.config.actionId as ActionId, execute, {
+      await runWorkerLoop(this.config.actionId as ActionId, execute, {
         workerId: this.config.workerId,
         authToken: this.config.authToken,
         concurrency: this.config.concurrency,
@@ -105,7 +105,7 @@ export class TypeScriptWorker {
     }
     console.log(`Executing single task: ${taskId}`)
 
-    await mandatoryTaskRunner(taskId, execute, {
+    await executeSingleTask(taskId, execute, {
       workerId: this.config.workerId,
       authToken: this.config.authToken,
       timeoutInterval: this.config.timeoutInterval,

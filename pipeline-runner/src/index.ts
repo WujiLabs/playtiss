@@ -1,8 +1,4 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Portions Copyright (c) 2023-2026 Pinscreen, Inc.
-// Original source / algorithm or asset licensed from:
-// Pinscreen, Inc.
-// https://www.pinscreen.com/
 /**
  * Workflow Discovery Service - v12 Handle-Based API
  *
@@ -31,7 +27,8 @@ type PipelineId = UserActionId
 const MONITORED_PIPELINES: PipelineId[] = [
   // "0197a952-d7c6-8fe4-87a8-56aeb0000001" as PipelineId, // Add Three Integer (old)
   // "0197cd70-9951-8971-8fd5-04b75b000001" as PipelineId, // Add Three Numbers (previous)
-  '019d048e-d525-89ca-8fed-1f12e6000001' as PipelineId, // Add Three Numbers (IPLD test)
+  '019d23fa-a774-8dc0-8804-715744000001' as PipelineId, // Add Three Numbers
+  '019d23fa-abce-814e-8ca4-d42c21000001' as PipelineId, // Split Add Two (split/merge test)
 ]
 
 // Main entry point

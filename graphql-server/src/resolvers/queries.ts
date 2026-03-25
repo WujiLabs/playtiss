@@ -404,7 +404,7 @@ export const listRevisionsForTask = async (
                 WorkflowRevisionNodeStateRowV12[]
               >((res, rej) => {
                 db.all<WorkflowRevisionNodeStateRowV12>(
-                  `SELECT workflow_revision_id, node_id_in_workflow, context_asset_hash, required_task_id, last_used_version_id, last_inputs_hash, dependency_status, runtime_status, error_message FROM WorkflowRevisionNodeStates WHERE workflow_revision_id = ?`,
+                  `SELECT workflow_revision_id, node_id_in_workflow, context_asset_hash, required_task_id, last_used_version_id, last_inputs_hash, meta_asset_hash, dependency_status, runtime_status, error_message FROM WorkflowRevisionNodeStates WHERE workflow_revision_id = ?`,
                   [revisionId],
                   (nodeErr, nr) => {
                     if (nodeErr) rej(nodeErr)
@@ -453,6 +453,7 @@ export const listRevisionsForTask = async (
                     nodeIdInWorkflow: nodeRow.node_id_in_workflow,
                     contextAssetHash: nodeRow.context_asset_hash as AssetId,
                     requiredTaskId: nodeRow.required_task_id as TraceId | null,
+                    metaAssetHash: nodeRow.meta_asset_hash as AssetId | null,
                     dependencyStatus: nodeRow.dependency_status as any,
                     runtimeStatus: nodeRow.runtime_status as any,
                     lastUsedVersion: lastUsedVersion,
@@ -860,6 +861,7 @@ interface WorkflowRevisionNodeStateRow {
   required_task_id: string | null // FK to Tasks.task_id (v12 addition)
   last_used_version_id: string | null // FK to Versions.version_id
   last_inputs_hash: string | null // Stored inputs hash (v13 addition)
+  meta_asset_hash: string | null // Stored meta slot values (^ prefix, v17 addition)
   dependency_status: string // "Fresh", "Stale"
   runtime_status: string // "Idle", "Running", "Failed", "PendingPlayerInput", "Blocked"
   error_message: string | null
@@ -1037,7 +1039,7 @@ export const getWorkflowRevision = async (
 
         // 2. Fetch related WorkflowRevisionNodeStates
         db.all<WorkflowRevisionNodeStateRow>(
-          `SELECT workflow_revision_id, node_id_in_workflow, context_asset_hash, required_task_id, last_used_version_id, last_inputs_hash, dependency_status, runtime_status, error_message FROM WorkflowRevisionNodeStates WHERE workflow_revision_id = ?`,
+          `SELECT workflow_revision_id, node_id_in_workflow, context_asset_hash, required_task_id, last_used_version_id, last_inputs_hash, meta_asset_hash, dependency_status, runtime_status, error_message FROM WorkflowRevisionNodeStates WHERE workflow_revision_id = ?`,
           [revisionId],
           async (nodeErr, nodeRows) => {
             if (nodeErr) {
@@ -1090,6 +1092,7 @@ export const getWorkflowRevision = async (
                   contextAssetHash: nodeRow.context_asset_hash as AssetId,
                   requiredTaskId: nodeRow.required_task_id as TraceId | null,
                   lastInputsHash: nodeRow.last_inputs_hash as AssetId | null,
+                  metaAssetHash: nodeRow.meta_asset_hash as AssetId | null,
                   dependencyStatus: nodeRow.dependency_status as any,
                   runtimeStatus: nodeRow.runtime_status as any,
                   lastUsedVersion: lastUsedVersion,
@@ -1131,6 +1134,7 @@ interface WorkflowRevisionNodeStateRowV12 {
   required_task_id: string | null
   last_used_version_id: string | null
   last_inputs_hash: string | null
+  meta_asset_hash: string | null
   dependency_status: string
   runtime_status: string
   error_message: string | null
@@ -1449,6 +1453,9 @@ export const getNodeState = async (
           | null,
           lastUsedVersion: null, // TODO: Load version if needed
           lastInputsHash: row.last_inputs_hash as
+          | Scalars['AssetId']['output']
+          | null,
+          metaAssetHash: row.meta_asset_hash as
           | Scalars['AssetId']['output']
           | null,
           dependencyStatus: row.dependency_status as 'FRESH' | 'STALE',

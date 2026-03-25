@@ -17,19 +17,22 @@ import type { TraceId } from 'playtiss/types/trace_id'
 import sqlite3 from 'sqlite3'
 import { getDB } from '../db.js'
 import { SqliteEventProducer } from '../event-bus/sqlite-producer.js'
-import { serializeMutation } from './mutation-serializer.js'
+import {
+  runInTransaction,
+  serializeMutation,
+  type TransactionContext,
+  withTransaction,
+} from './mutation-serializer.js'
 
 // ================================================================
 // INTERNAL OPERATIONS (run within transactions)
 // ================================================================
 
 /**
- * Internal operation context - tracks transaction state
+ * Internal operation context - tracks transaction state.
+ * Alias for TransactionContext from mutation-serializer.
  */
-export interface InternalOperationContext {
-  db: sqlite3.Database
-  transactionId: string
-}
+export type InternalOperationContext = TransactionContext
 
 /**
  * Low-level database operations that run within transactions
@@ -218,13 +221,13 @@ export class InternalDatabaseOperations {
         `INSERT INTO WorkflowRevisionNodeStates (
           workflow_revision_id, node_id_in_workflow, context_asset_hash,
           required_task_id, last_used_version_id, last_inputs_hash,
-          dependency_status, runtime_status, error_message
+          dependency_status, runtime_status, error_message, meta_asset_hash
         )
         SELECT
           ? AS new_revision_id,
           node_id_in_workflow, context_asset_hash,
           required_task_id, last_used_version_id, last_inputs_hash,
-          dependency_status, runtime_status, error_message
+          dependency_status, runtime_status, error_message, meta_asset_hash
         FROM WorkflowRevisionNodeStates
         WHERE workflow_revision_id = ?`,
         [data.newRevisionId, data.parentRevisionId],
@@ -796,39 +799,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId: string
     claimTtlSeconds: number
   }> {
-    return serializeMutation('claimWorkflowTask', async () => {
-      const db = getDB()
-      const transactionId = `claim_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            // Execute the complex operation using internal operations
-            executeClaimWorkflowTaskInternal(
-              ctx,
-              taskId,
-              workerId,
-              ttl,
-              revisionVersionId,
-              timestamp,
-            )
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('claimWorkflowTask', ctx =>
+      executeClaimWorkflowTaskInternal(ctx, taskId, workerId, ttl, revisionVersionId, timestamp),
+    )
   }
 
   /**
@@ -840,37 +813,9 @@ export class ExternalDatabaseMutations {
     taskId: TraceId,
     timestamp: number,
   ): Promise<{ id: TraceId, actionId: string, inputsContentHash: string }> {
-    return serializeMutation('createComputationalTask', async () => {
-      const db = getDB()
-      const transactionId = `create_task_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeCreateComputationalTaskInternal(
-              ctx,
-              actionId,
-              uniquenessHash,
-              taskId,
-              timestamp,
-            )
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('createComputationalTask', ctx =>
+      executeCreateComputationalTaskInternal(ctx, actionId, uniquenessHash, taskId, timestamp),
+    )
   }
 
   /**
@@ -883,37 +828,9 @@ export class ExternalDatabaseMutations {
     workflowInstanceTaskId: TraceId,
     timestamp: number,
   ): Promise<TraceId> {
-    return serializeMutation('requestExecution', async () => {
-      const db = getDB()
-      const transactionId = `request_execution_${handleId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeRequestExecutionInternal(
-              ctx,
-              actionId,
-              inputAssetId,
-              handleId,
-              workflowInstanceTaskId,
-              timestamp,
-            )
-              .then(() => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(handleId)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
+    return withTransaction('requestExecution', async (ctx) => {
+      await executeRequestExecutionInternal(ctx, actionId, inputAssetId, handleId, workflowInstanceTaskId, timestamp)
+      return handleId
     })
   }
 
@@ -931,31 +848,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId: string
     claimTtlSeconds: number
   }> {
-    return serializeMutation('claimTask', async () => {
-      const db = getDB()
-      const transactionId = `claim_task_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeClaimTaskInternal(ctx, taskId, workerId, ttl)
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('claimTask', ctx =>
+      executeClaimTaskInternal(ctx, taskId, workerId, ttl),
+    )
   }
 
   /**
@@ -972,36 +867,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId: string
     claimTtlSeconds: number
   }> {
-    return serializeMutation('reportTaskSuccess', async () => {
-      const db = getDB()
-      const transactionId = `report_success_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeReportTaskSuccessInternal(
-              ctx,
-              taskId,
-              resultVersionId,
-              workerId,
-            )
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('reportTaskSuccess', ctx =>
+      executeReportTaskSuccessInternal(ctx, taskId, resultVersionId, workerId),
+    )
   }
 
   /**
@@ -1018,36 +886,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId: string
     claimTtlSeconds: number
   }> {
-    return serializeMutation('reportTaskFailure', async () => {
-      const db = getDB()
-      const transactionId = `report_failure_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeReportTaskFailureInternal(
-              ctx,
-              taskId,
-              errorVersionId,
-              workerId,
-            )
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('reportTaskFailure', ctx =>
+      executeReportTaskFailureInternal(ctx, taskId, errorVersionId, workerId),
+    )
   }
 
   /**
@@ -1060,31 +901,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId?: string
     claimTtlSeconds?: number
   }> {
-    return serializeMutation('scheduleTaskForExecution', async () => {
-      const db = getDB()
-      const transactionId = `schedule_task_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeScheduleTaskForExecutionInternal(ctx, taskId)
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('scheduleTaskForExecution', ctx =>
+      executeScheduleTaskForExecutionInternal(ctx, taskId),
+    )
   }
 
   /**
@@ -1101,31 +920,9 @@ export class ExternalDatabaseMutations {
       lastInputsHash?: AssetId
     }>,
   ): Promise<{ id: TraceId, status: string, createdAt: number, nodes: any[] }> {
-    return serializeMutation('updateNodeStates', async () => {
-      const db = getDB()
-      const transactionId = `update_node_states_${revisionId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeUpdateNodeStatesInternal(ctx, revisionId, nodeUpdates)
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('updateNodeStates', ctx =>
+      executeUpdateNodeStatesInternal(ctx, revisionId, nodeUpdates),
+    )
   }
 
   /**
@@ -1138,31 +935,9 @@ export class ExternalDatabaseMutations {
     claimWorkerId: string | null
     claimTtlSeconds: number | null
   }> {
-    return serializeMutation('refreshTask', async () => {
-      const db = getDB()
-      const transactionId = `refresh_task_${taskId}_${Date.now()}`
-
-      return new Promise((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
-
-            const ctx: InternalOperationContext = { db, transactionId }
-
-            executeRefreshTaskInternal(ctx, taskId)
-              .then((result) => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) reject(commitErr)
-                  else resolve(result)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
-    })
+    return withTransaction('refreshTask', ctx =>
+      executeRefreshTaskInternal(ctx, taskId),
+    )
   }
 
   /**
@@ -1187,6 +962,9 @@ export class ExternalDatabaseMutations {
     commitMessage?: string
     triggerReason?: string
   }): Promise<TraceId> {
+    // Mixed pattern: non-transactional state copy + transactional finalization,
+    // both serialized. Uses serializeMutation + runInTransaction instead of
+    // withTransaction because only part 2 needs a transaction.
     return serializeMutation('forkRevision', async () => {
       const db = getDB()
       const ctx: InternalOperationContext = {
@@ -1194,7 +972,7 @@ export class ExternalDatabaseMutations {
         transactionId: 'forkRevision',
       }
 
-      // Part 1: Duplicate node states (outside transaction)
+      // Part 1: Duplicate node states (outside transaction, but serialized)
       await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(
         ctx,
         {
@@ -1204,24 +982,11 @@ export class ExternalDatabaseMutations {
       )
 
       // Part 2: Finalize fork in transaction
-      return new Promise<TraceId>((resolve, reject) => {
-        db.serialize(() => {
-          db.run('BEGIN IMMEDIATE;', (beginErr) => {
-            if (beginErr) return reject(beginErr)
+      await runInTransaction(db, 'forkRevision_txn', txCtx =>
+        InternalDatabaseOperations.finalizeRevisionFork(txCtx, data),
+      )
 
-            InternalDatabaseOperations.finalizeRevisionFork(ctx, data)
-              .then(() => {
-                db.run('COMMIT;', (commitErr) => {
-                  if (commitErr) return reject(commitErr)
-                  resolve(data.newRevisionId)
-                })
-              })
-              .catch((error) => {
-                db.run('ROLLBACK;', () => reject(error))
-              })
-          })
-        })
-      })
+      return data.newRevisionId
     })
   }
 }
@@ -1684,6 +1449,7 @@ async function executeUpdateNodeStatesInternal(
     contextAssetHash: AssetId
     requiredTaskId?: TraceId
     lastInputsHash?: AssetId
+    metaAssetHash?: AssetId
   }>,
 ): Promise<{ id: TraceId, status: string, createdAt: number, nodes: any[] }> {
   // Process each node update
@@ -1714,20 +1480,26 @@ async function executeUpdateNodeStatesInternal(
         ? update.lastInputsHash
         : '__KEEP__'
 
+      const hasMetaAssetHash = update.metaAssetHash !== undefined
+      const metaAssetHashValue = hasMetaAssetHash
+        ? update.metaAssetHash
+        : '__KEEP__'
+
       console.log(
         `🔍 [DB_OPS] SQL values: lastInputsHash=${lastInputsHashValue} (from ${update.lastInputsHash})`,
       )
 
       const query = `INSERT INTO WorkflowRevisionNodeStates (
            workflow_revision_id, node_id_in_workflow, context_asset_hash,
-           dependency_status, runtime_status, required_task_id, last_inputs_hash
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           dependency_status, runtime_status, required_task_id, last_inputs_hash, meta_asset_hash
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(workflow_revision_id, node_id_in_workflow, context_asset_hash)
          DO UPDATE SET
            dependency_status = COALESCE(excluded.dependency_status, dependency_status),
            runtime_status = COALESCE(excluded.runtime_status, runtime_status),
            required_task_id = CASE WHEN excluded.required_task_id = '__KEEP__' THEN required_task_id ELSE excluded.required_task_id END,
-           last_inputs_hash = CASE WHEN excluded.last_inputs_hash = '__KEEP__' THEN last_inputs_hash ELSE excluded.last_inputs_hash END`
+           last_inputs_hash = CASE WHEN excluded.last_inputs_hash = '__KEEP__' THEN last_inputs_hash ELSE excluded.last_inputs_hash END,
+           meta_asset_hash = CASE WHEN excluded.meta_asset_hash = '__KEEP__' THEN meta_asset_hash ELSE excluded.meta_asset_hash END`
 
       const params = [
         revisionId,
@@ -1737,6 +1509,7 @@ async function executeUpdateNodeStatesInternal(
         update.runtimeStatus,
         requiredTaskIdValue,
         lastInputsHashValue,
+        metaAssetHashValue,
       ]
 
       console.log(`🔍 [DB_OPS] Executing SQL with params:`, params)

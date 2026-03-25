@@ -15,7 +15,7 @@ import { runWorker } from './index.js'
 import type { RunnerContext } from './runner.js'
 
 // add_two action ID - consistent with integration test seed DB
-export const ACTION_ID_ADD_TWO = '019d048e-d520-8ddb-8b9b-3b04d2000001'
+export const ACTION_ID_ADD_TWO = '019d23fa-a76d-8582-8b7a-e227e1000001'
 
 class ErrorWithOutput extends Error {
   output?: DictAsset

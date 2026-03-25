@@ -6,6 +6,11 @@ import { sha256 } from 'multiformats/hashes/sha2'
 import * as raw from 'multiformats/codecs/raw'
 import type { AssetId, AssetValue } from '../index.js'
 
+// Safe cast: we know the CID was created with dag-json/sha256 or raw/sha256
+export function cidToAssetId(cid: CID): AssetId {
+  return cid.toString() as AssetId
+}
+
 /**
  * Recursively flatten an AssetValue so every nested object, array,
  * and binary buffer is replaced by its content-addressed CID.
@@ -78,7 +83,7 @@ export async function computeTopBlock(input: AssetValue): Promise<{
 export async function computeHash(input: Uint8Array): Promise<AssetId>
 export async function computeHash(input: unknown): Promise<AssetId>
 export async function computeHash(input: unknown): Promise<AssetId> {
-  if (input instanceof CID) return (input as CID).toString()
+  if (input instanceof CID) return cidToAssetId(input as CID)
   const { cid } = await computeTopBlock(input as AssetValue)
-  return cid.toString()
+  return cidToAssetId(cid)
 }
