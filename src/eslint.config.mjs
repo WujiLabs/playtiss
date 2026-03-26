@@ -3,7 +3,7 @@ import { mainConfig } from '../eslint.base.mjs';
 import nodePath from 'node:path'
 
 export const paths = {
-  ignores: ['dist/**', "test/**",'eslint.config.mjs', "**/*.js"],
+  ignores: ['dist/**', 'eslint.config.mjs', "**/*.js"],
   files: ["**/*.ts"],
 }
 

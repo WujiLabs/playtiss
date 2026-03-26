@@ -12,11 +12,10 @@ import { existsSync, readFileSync } from 'fs'
 import type { ActionId, AssetId, AssetValue, DictAsset, TraceId } from 'playtiss'
 import { isAssetId } from 'playtiss'
 import { store } from 'playtiss/asset-store'
-import { encodeToString, decodeFromString } from 'playtiss/types/json'
+import { decodeFromString } from 'playtiss/types/json'
 import { isTraceId } from 'playtiss/types/trace_id'
 
-// Compatibility aliases for the IPLD migration
-type DictLazyAsset = DictAsset
+// Compatibility alias for the IPLD migration
 type LazyAsset = AssetValue
 import type {
   ListActionsQuery,

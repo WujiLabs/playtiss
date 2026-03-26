@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import * as Block from 'multiformats/block'
 import * as dagJSON from '@ipld/dag-json'
+import * as Block from 'multiformats/block'
 import { CID } from 'multiformats/cid'
-import { sha256 } from 'multiformats/hashes/sha2'
 import * as raw from 'multiformats/codecs/raw'
+import { sha256 } from 'multiformats/hashes/sha2'
+
 import type { AssetId, AssetValue } from '../index.js'
 
 // Safe cast: we know the CID was created with dag-json/sha256 or raw/sha256

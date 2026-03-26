@@ -1,39 +1,8 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { ApolloServer } from '@apollo/server'
+import { ApolloServer, type ApolloServerPlugin, type BaseContext } from '@apollo/server'
 import { readFileSync } from 'fs'
+
 import type { Resolvers } from './__generated__/graphql.js'
-
-// Scalar imports
-import { ActionIdScalar } from './scalars/action_id.js'
-import { AssetIdScalar } from './scalars/asset_id.js'
-import { DateScalar } from './scalars/date.js'
-import { DictJSONAssetScalar } from './scalars/json_asset.js'
-import { SystemActionIdScalar } from './scalars/system_action_id.js'
-import { TraceIdScalar } from './scalars/trace_id.js'
-
-// Query resolver imports
-import {
-  findProcessableRevisions as queryFindProcessableRevisions,
-  findRunnableTasks as queryFindRunnableTasks,
-  getActionDetails as queryGetActionDetails,
-  getExecutionResult as queryGetExecutionResult,
-  getMergeAccumulator as queryGetMergeAccumulator,
-  getNodeState as queryGetNodeState,
-  getProfile as queryGetProfile,
-  getRevision as queryGetRevision,
-  getTask as queryGetTask,
-  getTaskExecutionState as queryGetTaskExecutionState,
-  getVersion as queryGetVersion,
-  getWorkflowRevisionNodeState as queryGetWorkflowRevisionNodeState,
-  getWorkflowRevisionStatus as queryGetWorkflowRevisionStatus,
-  getInterceptorSession as queryGetInterceptorSession,
-  listActions as queryListActions,
-  listActiveWorkflowRevisionNodeStatesByTask as queryListActiveWorkflowRevisionNodeStatesByTask,
-  listRevisionsForTask as queryListRevisionsForTask,
-  listTasksByAction as queryListTasksByAction,
-  listWorkflowRevisionNodeStatesByTask as queryListWorkflowRevisionNodeStatesByTask,
-} from './resolvers/queries.js'
-
 // Mutation resolver imports
 import {
   claimTask as mutationClaimTask,
@@ -52,12 +21,40 @@ import {
   requestExecution as mutationRequestExecution,
   requestNodeRerun as mutationRequestNodeRerun,
   requestStaleNodesUpdate as mutationRequestStaleNodesUpdate,
-  scheduleTaskForExecution as mutationScheduleTaskForExecution,
   saveInterceptorSession as mutationSaveInterceptorSession,
+  scheduleTaskForExecution as mutationScheduleTaskForExecution,
   setMergeAccumulator as mutationSetMergeAccumulator,
   submitPlayerInput as mutationSubmitPlayerInput,
   updateNodeStates as mutationUpdateNodeStates,
 } from './resolvers/mutations.js'
+// Query resolver imports
+import {
+  findProcessableRevisions as queryFindProcessableRevisions,
+  findRunnableTasks as queryFindRunnableTasks,
+  getActionDetails as queryGetActionDetails,
+  getExecutionResult as queryGetExecutionResult,
+  getInterceptorSession as queryGetInterceptorSession,
+  getMergeAccumulator as queryGetMergeAccumulator,
+  getNodeState as queryGetNodeState,
+  getRevision as queryGetRevision,
+  getTask as queryGetTask,
+  getTaskExecutionState as queryGetTaskExecutionState,
+  getVersion as queryGetVersion,
+  getWorkflowRevisionNodeState as queryGetWorkflowRevisionNodeState,
+  getWorkflowRevisionStatus as queryGetWorkflowRevisionStatus,
+  listActions as queryListActions,
+  listActiveWorkflowRevisionNodeStatesByTask as queryListActiveWorkflowRevisionNodeStatesByTask,
+  listRevisionsForTask as queryListRevisionsForTask,
+  listTasksByAction as queryListTasksByAction,
+  listWorkflowRevisionNodeStatesByTask as queryListWorkflowRevisionNodeStatesByTask,
+} from './resolvers/queries.js'
+// Scalar imports
+import { ActionIdScalar } from './scalars/action_id.js'
+import { AssetIdScalar } from './scalars/asset_id.js'
+import { DateScalar } from './scalars/date.js'
+import { DictJSONAssetScalar } from './scalars/json_asset.js'
+import { SystemActionIdScalar } from './scalars/system_action_id.js'
+import { TraceIdScalar } from './scalars/trace_id.js'
 
 // Export typeDefs and resolvers for shared use
 export const typeDefs = readFileSync('./schema.graphql', { encoding: 'utf-8' })
@@ -70,7 +67,6 @@ export const resolvers: Resolvers = {
   Date: DateScalar,
   DictJSONAsset: DictJSONAssetScalar,
   Query: {
-    getProfile: queryGetProfile,
     getTask: queryGetTask,
     getVersion: queryGetVersion,
     getActionDetails: queryGetActionDetails,
@@ -118,9 +114,9 @@ export const resolvers: Resolvers = {
 }
 
 // Factory function to create Apollo Server with optional plugins
-export function createApolloServer(
-  plugins?: any[],
-): ApolloServer {
+export function createApolloServer<TContext extends BaseContext = BaseContext>(
+  plugins?: ApolloServerPlugin<TContext>[],
+): ApolloServer<TContext> {
   return new ApolloServer({
     typeDefs,
     resolvers,

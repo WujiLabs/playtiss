@@ -6,7 +6,9 @@
  * via projection offsets (consumer bookmarks).
  */
 
-import sqlite3 from 'sqlite3'
+import type { Database as DatabaseType } from 'better-sqlite3'
+import Database from 'better-sqlite3'
+
 import type {
   Event,
   IConsumerSubscription,
@@ -33,7 +35,7 @@ export class SqliteEventConsumer implements IEventConsumer {
  * Manages polling and offset commits for a specific projection
  */
 class SqliteConsumerSubscription implements IConsumerSubscription {
-  private db: sqlite3.Database
+  private db: DatabaseType
   private lastProcessedEventId: string | null = null
   private initialized = false
 
@@ -42,49 +44,35 @@ class SqliteConsumerSubscription implements IConsumerSubscription {
     private projectionId: string,
     private topics: string[],
   ) {
-    this.db = new sqlite3.Database(dbPath)
+    this.db = new Database(dbPath, { timeout: 30000 })
   }
 
   /**
    * Initialize the projection offset
    * Creates a new offset entry if none exists
    */
-  private async initializeOffset(): Promise<void> {
+  private initializeOffset(): void {
     if (this.initialized) return
 
-    return new Promise((resolve, reject) => {
-      this.db.get(
-        `SELECT last_processed_event_id FROM ProjectionOffsets WHERE projection_id = ?`,
-        [this.projectionId],
-        (err, row: any) => {
-          if (err) return reject(err)
+    const row = this.db.prepare(
+      `SELECT last_processed_event_id FROM ProjectionOffsets WHERE projection_id = ?`,
+    ).get(this.projectionId) as { last_processed_event_id: string } | undefined
 
-          if (row) {
-            // Existing offset found
-            this.lastProcessedEventId = row.last_processed_event_id || ''
-            console.log(
-              `📖 Resuming from offset: ${this.lastProcessedEventId || '(beginning)'}`,
-            )
-            this.initialized = true
-            resolve()
-          }
-          else {
-            // Initialize new projection offset
-            console.log(`📝 Initializing new projection: ${this.projectionId}`)
-            this.db.run(
-              `INSERT INTO ProjectionOffsets (projection_id, last_processed_event_id) VALUES (?, ?)`,
-              [this.projectionId, ''],
-              (err) => {
-                if (err) return reject(err)
-                this.lastProcessedEventId = ''
-                this.initialized = true
-                resolve()
-              },
-            )
-          }
-        },
+    if (row) {
+      this.lastProcessedEventId = row.last_processed_event_id || ''
+      console.log(
+        `📖 Resuming from offset: ${this.lastProcessedEventId || '(beginning)'}`,
       )
-    })
+    }
+    else {
+      console.log(`📝 Initializing new projection: ${this.projectionId}`)
+      this.db.prepare(
+        `INSERT INTO ProjectionOffsets (projection_id, last_processed_event_id) VALUES (?, ?)`,
+      ).run(this.projectionId, '')
+      this.lastProcessedEventId = ''
+    }
+
+    this.initialized = true
   }
 
   /**
@@ -95,8 +83,7 @@ class SqliteConsumerSubscription implements IConsumerSubscription {
    * @returns Array of events (may be empty)
    */
   async poll(batchSize: number): Promise<Event[]> {
-    // Ensure offset is initialized
-    await this.initializeOffset()
+    this.initializeOffset()
 
     const placeholders = this.topics.map(() => '?').join(',')
     const query = `
@@ -108,24 +95,18 @@ class SqliteConsumerSubscription implements IConsumerSubscription {
       LIMIT ?
     `
 
-    return new Promise((resolve, reject) => {
-      this.db.all(
-        query,
-        [...this.topics, this.lastProcessedEventId || '', batchSize],
-        (err, rows: any[]) => {
-          if (err) return reject(err)
+    const rows = this.db.prepare(query).all(
+      ...this.topics,
+      this.lastProcessedEventId || '',
+      batchSize,
+    ) as Array<{ event_id: string, topic: string, payload: string, timestamp_created: number }>
 
-          const events: Event[] = rows.map(row => ({
-            id: row.event_id,
-            topic: row.topic,
-            payload: JSON.parse(row.payload),
-            timestamp: row.timestamp_created,
-          }))
-
-          resolve(events)
-        },
-      )
-    })
+    return rows.map(row => ({
+      id: row.event_id,
+      topic: row.topic,
+      payload: JSON.parse(row.payload),
+      timestamp: row.timestamp_created,
+    }))
   }
 
   /**
@@ -135,28 +116,17 @@ class SqliteConsumerSubscription implements IConsumerSubscription {
    * @param event The event to mark as processed
    */
   async commit(event: Event): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        `UPDATE ProjectionOffsets SET last_processed_event_id = ? WHERE projection_id = ?`,
-        [event.id, this.projectionId],
-        (err) => {
-          if (err) return reject(err)
-          this.lastProcessedEventId = event.id
-          resolve()
-        },
-      )
-    })
+    this.db.prepare(
+      `UPDATE ProjectionOffsets SET last_processed_event_id = ? WHERE projection_id = ?`,
+    ).run(event.id, this.projectionId)
+    this.lastProcessedEventId = event.id
   }
 
   /**
    * Close the subscription and database connection
    */
   async close(): Promise<void> {
-    return new Promise((resolve) => {
-      this.db.close(() => {
-        console.log(`🔒 Closed event bus subscription: ${this.projectionId}`)
-        resolve()
-      })
-    })
+    this.db.close()
+    console.log(`🔒 Closed event bus subscription: ${this.projectionId}`)
   }
 }

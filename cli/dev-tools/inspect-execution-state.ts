@@ -9,259 +9,229 @@
  * Usage: tsx dev-tools/inspect-execution-state.ts <task-id>
  */
 
-import dotenv from "dotenv";
+import dotenv from 'dotenv'
 
 // Load environment configuration from local .env file
-dotenv.config();
+dotenv.config()
 
-import fs from "fs";
-import { homedir } from "os";
-import path from "path";
-import sqlite3 from "sqlite3";
+import Database from 'better-sqlite3'
+import fs from 'fs'
+import { homedir } from 'os'
+import path from 'path'
 
 // Helper function to get default DB path in ~/.playtiss
 const getDefaultDbPath = () => {
-  const playtissDir = path.join(homedir(), ".playtiss");
+  const playtissDir = path.join(homedir(), '.playtiss')
   // Ensure directory exists
   if (!fs.existsSync(playtissDir)) {
-    fs.mkdirSync(playtissDir, { recursive: true });
+    fs.mkdirSync(playtissDir, { recursive: true })
   }
-  return path.join(playtissDir, "playtiss.db");
-};
+  return path.join(playtissDir, 'playtiss.db')
+}
 
 interface TaskExecutionStateRow {
-  task_id: string;
-  runtime_status: string;
-  claim_timestamp: number | null;
-  claim_worker_id: string | null;
-  claim_ttl_seconds: number | null;
-  action_id: string | null;
-  expiration_time: number | null;
+  task_id: string
+  runtime_status: string
+  claim_timestamp: number | null
+  claim_worker_id: string | null
+  claim_ttl_seconds: number | null
+  action_id: string | null
+  expiration_time: number | null
 }
 
 interface TaskRow {
-  task_id: string;
-  scope_id: string;
-  action_id: string;
-  inputs_content_hash: string | null;
-  name: string | null;
-  description: string | null;
-  current_version_id: string | null;
-  timestamp_created: number;
+  task_id: string
+  scope_id: string
+  action_id: string
+  inputs_content_hash: string | null
+  name: string | null
+  description: string | null
+  current_version_id: string | null
+  timestamp_created: number
 }
 
-async function inspectTaskExecutionState(taskId: string): Promise<void> {
-  const dbPath = process.env.PLAYTISS_DB_PATH || getDefaultDbPath();
-  console.log(`🔍 Using database: ${dbPath}`);
+function inspectTaskExecutionState(taskId: string): void {
+  const dbPath = process.env.PLAYTISS_DB_PATH || getDefaultDbPath()
+  console.log(`🔍 Using database: ${dbPath}`)
 
-  return new Promise<void>((resolve, reject) => {
-    const db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        console.error(`❌ Error opening database: ${err.message}`);
-        reject(err);
-        return;
-      }
+  const db = new Database(dbPath, { readonly: true })
 
-      console.log(`⚡ Task Execution State Details`);
-      console.log("━".repeat(80));
-      console.log(`Task ID: ${taskId}`);
-      console.log();
+  console.log(`⚡ Task Execution State Details`)
+  console.log('━'.repeat(80))
+  console.log(`Task ID: ${taskId}`)
+  console.log()
 
-      inspectFromDB(db, taskId).then(resolve).catch(reject);
-    });
-  });
+  inspectFromDB(db, taskId)
 }
 
-async function inspectFromDB(db: sqlite3.Database, taskId: string) {
+function inspectFromDB(db: InstanceType<typeof Database>, taskId: string) {
   try {
     // Get task execution state
-    const executionState = await new Promise<TaskExecutionStateRow | null>(
-      (resolve, reject) => {
-        db.get(
-          "SELECT * FROM TaskExecutionStates WHERE task_id = ?",
-          [taskId],
-          (err, row: TaskExecutionStateRow) => {
-            if (err) {
-              console.error(`❌ Database query error: ${err.message}`);
-              reject(err);
-            } else {
-              resolve(row || null);
-            }
-          }
-        );
-      }
-    );
+    const executionState = db.prepare('SELECT * FROM TaskExecutionStates WHERE task_id = ?').get(taskId) as TaskExecutionStateRow | undefined
 
     if (!executionState) {
-      console.log("❌ No task execution state found for this task ID.");
+      console.log('❌ No task execution state found for this task ID.')
 
       // Check if task exists in Tasks table
-      const task = await new Promise<TaskRow | null>((resolve, reject) => {
-        db.get(
-          "SELECT * FROM Tasks WHERE task_id = ?",
-          [taskId],
-          (err, row: TaskRow) => {
-            if (err) reject(err);
-            else resolve(row || null);
-          }
-        );
-      });
+      const task = db.prepare('SELECT * FROM Tasks WHERE task_id = ?').get(taskId) as TaskRow | undefined
 
       if (task) {
         console.log(
-          "📋 Task exists in Tasks table but has no execution state."
-        );
+          '📋 Task exists in Tasks table but has no execution state.',
+        )
         console.log(
-          "   This might be a workflow definition task or other non-executable task."
-        );
-        console.log();
-        console.log("📋 Task Details:");
-        console.log(`   Action ID: ${task.action_id}`);
-        console.log(`   Name: ${task.name || "(unnamed)"}`);
+          '   This might be a workflow definition task or other non-executable task.',
+        )
+        console.log()
+        console.log('📋 Task Details:')
+        console.log(`   Action ID: ${task.action_id}`)
+        console.log(`   Name: ${task.name || '(unnamed)'}`)
         console.log(
-          `   Description: ${task.description || "(no description)"}`
-        );
+          `   Description: ${task.description || '(no description)'}`,
+        )
         console.log(
-          `   Created: ${new Date(task.timestamp_created).toISOString()}`
-        );
-      } else {
-        console.log("❌ Task does not exist in Tasks table either.");
+          `   Created: ${new Date(task.timestamp_created).toISOString()}`,
+        )
       }
-      return;
+      else {
+        console.log('❌ Task does not exist in Tasks table either.')
+      }
+      return
     }
 
     // Get related task info for comparison
-    const task = await new Promise<TaskRow | null>((resolve, reject) => {
-      db.get(
-        "SELECT * FROM Tasks WHERE task_id = ?",
-        [taskId],
-        (err, row: TaskRow) => {
-          if (err) reject(err);
-          else resolve(row || null);
-        }
-      );
-    });
+    const task = db.prepare('SELECT * FROM Tasks WHERE task_id = ?').get(taskId) as TaskRow | undefined
 
-    console.log("⚡ Execution State:");
-    console.log(`   Runtime Status: ${executionState.runtime_status}`);
-    console.log(`   Action ID: ${executionState.action_id || "(null)"}`);
+    console.log('⚡ Execution State:')
+    console.log(`   Runtime Status: ${executionState.runtime_status}`)
+    console.log(`   Action ID: ${executionState.action_id || '(null)'}`)
 
     if (executionState.claim_timestamp) {
       console.log(
-        `   Claim Timestamp: ${new Date(executionState.claim_timestamp).toISOString()}`
-      );
+        `   Claim Timestamp: ${new Date(executionState.claim_timestamp).toISOString()}`,
+      )
       console.log(
-        `   Claim Worker ID: ${executionState.claim_worker_id || "(null)"}`
-      );
+        `   Claim Worker ID: ${executionState.claim_worker_id || '(null)'}`,
+      )
       console.log(
-        `   Claim TTL: ${executionState.claim_ttl_seconds || "(null)"} seconds`
-      );
+        `   Claim TTL: ${executionState.claim_ttl_seconds || '(null)'} seconds`,
+      )
 
       if (executionState.expiration_time) {
-        const currentTime = Date.now();
-        const expired = currentTime > executionState.expiration_time;
+        const currentTime = Date.now()
+        const expired = currentTime > executionState.expiration_time
         console.log(
-          `   Expiration Time: ${new Date(executionState.expiration_time).toISOString()}`
-        );
-        console.log(`   Claim Status: ${expired ? "❌ EXPIRED" : "✅ ACTIVE"}`);
+          `   Expiration Time: ${new Date(executionState.expiration_time).toISOString()}`,
+        )
+        console.log(`   Claim Status: ${expired ? '❌ EXPIRED' : '✅ ACTIVE'}`)
 
         if (expired) {
-          const expiredMs = currentTime - executionState.expiration_time;
+          const expiredMs = currentTime - executionState.expiration_time
           console.log(
-            `   Expired For: ${Math.round(expiredMs / 1000)} seconds`
-          );
+            `   Expired For: ${Math.round(expiredMs / 1000)} seconds`,
+          )
         }
       }
-    } else {
-      console.log(`   Claim Timestamp: (not claimed)`);
+    }
+    else {
+      console.log(`   Claim Timestamp: (not claimed)`)
     }
 
-    console.log();
+    console.log()
 
     if (task) {
-      console.log("📋 Related Task Info:");
-      console.log(`   Task ID: ${task.task_id}`);
-      console.log(`   Action ID: ${task.action_id}`);
-      console.log(`   Name: ${task.name || "(unnamed)"}`);
-      console.log(`   Description: ${task.description || "(no description)"}`);
+      console.log('📋 Related Task Info:')
+      console.log(`   Task ID: ${task.task_id}`)
+      console.log(`   Action ID: ${task.action_id}`)
+      console.log(`   Name: ${task.name || '(unnamed)'}`)
+      console.log(`   Description: ${task.description || '(no description)'}`)
       console.log(
-        `   Created: ${new Date(task.timestamp_created).toISOString()}`
-      );
-      console.log(`   Current Version: ${task.current_version_id || "(none)"}`);
-      console.log();
+        `   Created: ${new Date(task.timestamp_created).toISOString()}`,
+      )
+      console.log(`   Current Version: ${task.current_version_id || '(none)'}`)
+      console.log()
 
       // Check denormalization consistency
       if (executionState.action_id !== task.action_id) {
-        console.log("⚠️  DENORMALIZATION INCONSISTENCY:");
+        console.log('⚠️  DENORMALIZATION INCONSISTENCY:')
         console.log(
-          `   TaskExecutionStates.action_id: ${executionState.action_id}`
-        );
-        console.log(`   Tasks.action_id: ${task.action_id}`);
-        console.log();
-      } else {
+          `   TaskExecutionStates.action_id: ${executionState.action_id}`,
+        )
+        console.log(`   Tasks.action_id: ${task.action_id}`)
+        console.log()
+      }
+      else {
         console.log(
-          "✅ Denormalized action_id is consistent with Tasks table."
-        );
-        console.log();
+          '✅ Denormalized action_id is consistent with Tasks table.',
+        )
+        console.log()
       }
     }
 
     // Show runnable status
-    console.log("🏃 Runnable Analysis:");
-    const currentTime = Date.now();
-    let isRunnable = false;
-    let reason = "";
+    console.log('🏃 Runnable Analysis:')
+    const currentTime = Date.now()
+    let isRunnable = false
+    let reason = ''
 
-    if (executionState.runtime_status === "PENDING") {
-      isRunnable = true;
-      reason = "Status is PENDING";
-    } else if (
-      executionState.runtime_status === "RUNNING" &&
-      executionState.expiration_time &&
-      currentTime > executionState.expiration_time
+    if (executionState.runtime_status === 'PENDING') {
+      isRunnable = true
+      reason = 'Status is PENDING'
+    }
+    else if (
+      executionState.runtime_status === 'RUNNING'
+      && executionState.expiration_time
+      && currentTime > executionState.expiration_time
     ) {
-      isRunnable = true;
-      reason = "Status is RUNNING but claim has expired";
-    } else if (executionState.runtime_status === "RUNNING") {
-      reason = "Status is RUNNING with active claim";
-    } else {
-      reason = `Status is ${executionState.runtime_status} (not runnable)`;
+      isRunnable = true
+      reason = 'Status is RUNNING but claim has expired'
+    }
+    else if (executionState.runtime_status === 'RUNNING') {
+      reason = 'Status is RUNNING with active claim'
+    }
+    else {
+      reason = `Status is ${executionState.runtime_status} (not runnable)`
     }
 
-    console.log(`   Is Runnable: ${isRunnable ? "✅ YES" : "❌ NO"}`);
-    console.log(`   Reason: ${reason}`);
-  } catch (error: any) {
-    console.error(`❌ Error inspecting task execution state: ${error.message}`);
-    throw error;
-  } finally {
-    db.close();
+    console.log(`   Is Runnable: ${isRunnable ? '✅ YES' : '❌ NO'}`)
+    console.log(`   Reason: ${reason}`)
+  }
+  catch (error: any) {
+    console.error(`❌ Error inspecting task execution state: ${error.message}`)
+    throw error
+  }
+  finally {
+    db.close()
   }
 }
 
 // Main execution
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const taskId = process.argv[2];
+  const taskId = process.argv[2]
 
   if (!taskId) {
-    console.error("Usage: tsx dev-tools/inspect-execution-state.ts <task-id>");
-    console.error("");
+    console.error('Usage: tsx dev-tools/inspect-execution-state.ts <task-id>')
+    console.error('')
     console.error(
-      "This tool inspects detailed task execution state information including:"
-    );
-    console.error("- Runtime status and claim information");
-    console.error("- Denormalized action_id consistency");
-    console.error("- Expiration time and claim status");
-    console.error("- Runnable analysis based on current criteria");
-    console.error("");
-    console.error("Example:");
+      'This tool inspects detailed task execution state information including:',
+    )
+    console.error('- Runtime status and claim information')
+    console.error('- Denormalized action_id consistency')
+    console.error('- Expiration time and claim status')
+    console.error('- Runnable analysis based on current criteria')
+    console.error('')
+    console.error('Example:')
     console.error(
-      "  tsx dev-tools/inspect-execution-state.ts 01977aaa-7b52-8f28-8a82-123456789abc"
-    );
-    process.exit(1);
+      '  tsx dev-tools/inspect-execution-state.ts 01977aaa-7b52-8f28-8a82-123456789abc',
+    )
+    process.exit(1)
   }
 
-  inspectTaskExecutionState(taskId).catch((error) => {
-    console.error("Failed to inspect task execution state:", error);
-    process.exit(1);
-  });
+  try {
+    inspectTaskExecutionState(taskId)
+  }
+  catch (error) {
+    console.error('Failed to inspect task execution state:', error)
+    process.exit(1)
+  }
 }

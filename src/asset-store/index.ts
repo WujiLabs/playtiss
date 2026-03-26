@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { CID } from 'multiformats/cid'
-import * as Block from 'multiformats/block'
 import * as dagJSON from '@ipld/dag-json'
+import * as Block from 'multiformats/block'
+import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
+
 import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '../index.js'
 import { cidToAssetId, computeTopBlock } from './compute_hash.js'
 import { fetchBuffer, hasBuffer, saveBuffer } from './storage-factory.js'
@@ -45,7 +46,6 @@ export async function store(input: AssetValue): Promise<AssetId> {
   return id
 }
 
-
 export async function load(id: AssetId): Promise<AssetValue> {
   const cid = CID.parse(id)
   const buffer = await fetchBuffer(id)
@@ -80,6 +80,8 @@ export async function fromLink<T extends DictAsset>(v: ValueOrLink<T>): Promise<
 // WEB ENVIRONMENT API
 // ===================================================================
 
+export { cidToAssetId, computeHash } from './compute_hash.js'
+export type { AwsCredentials, BridgeConfig, S3Config } from './config.js'
 export {
   resetStorageProvider,
   setBridgeStorageProvider,
@@ -87,6 +89,3 @@ export {
   setLocalWebStorageProvider,
   setS3WebStorageProvider,
 } from './storage-factory.js'
-
-export { cidToAssetId, computeHash } from './compute_hash.js'
-export type { AwsCredentials, BridgeConfig, S3Config } from './config.js'

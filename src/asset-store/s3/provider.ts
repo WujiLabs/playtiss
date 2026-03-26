@@ -7,6 +7,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { type StreamingBlobPayloadInputTypes } from '@smithy/types'
 import { CID } from 'multiformats/cid'
+
 import { config as awsConfig } from '../../config.js'
 import { type AssetId } from '../../index.js'
 import { type StorageConfig } from '../config.js'
@@ -15,10 +16,10 @@ import {
   type StorageProvider,
 } from '../storage-provider.js'
 import {
-  saveAssetWithMetadata,
   saveAssetReferences as saveS3AssetReferences,
   saveAssetToActionReferences as saveS3AssetToActionReferences,
   saveAssetToVersionReferences as saveS3AssetToVersionReferences,
+  saveAssetWithMetadata,
 } from './metadata.js'
 import {
   getS3Client,
@@ -52,7 +53,7 @@ export class S3StorageProvider implements StorageProvider {
       await getS3Client().send(new HeadObjectCommand(params))
       return true
     }
-    catch (err: any) {
+    catch (err) {
       return this.handleExistenceError(err, id, params)
     }
   }
@@ -72,7 +73,7 @@ export class S3StorageProvider implements StorageProvider {
       }
       return await response.Body.transformToByteArray()
     }
-    catch (err: any) {
+    catch (err) {
       throw this.enrichFetchError(err, id, params)
     }
   }
@@ -94,8 +95,8 @@ export class S3StorageProvider implements StorageProvider {
         `S3StorageProvider saved asset ${id} (${buffer.length} bytes)`,
       )
     }
-    catch (err: any) {
-      console.error(`S3StorageProvider.saveBuffer failed for ${id}:`, err.message)
+    catch (err) {
+      console.error(`S3StorageProvider.saveBuffer failed for ${id}:`, err instanceof Error ? err.message : String(err))
       throw err
     }
   }
@@ -139,7 +140,7 @@ export class S3StorageProvider implements StorageProvider {
       ...this.objectParams(id),
       ResponseContentDisposition: `attachment;filename=${displayName}`,
     })
-    return getSignedUrl(getS3Client() as any, command, { expiresIn })
+    return getSignedUrl(getS3Client(), command, { expiresIn })
   }
 
   // ---------------------------------------------------------------------------
@@ -193,7 +194,7 @@ export class S3StorageProvider implements StorageProvider {
   // ---------------------------------------------------------------------------
 
   /** Map an asset CID to its S3 object key. */
-  private objectParams(id: AssetId): { Bucket: string; Key: string } {
+  private objectParams(id: AssetId): { Bucket: string, Key: string } {
     return getS3ObjectParams(`objects/${id}`)
   }
 
@@ -227,7 +228,7 @@ export class S3StorageProvider implements StorageProvider {
   private handleExistenceError(
     err: any,
     id: AssetId,
-    params: { Bucket: string; Key: string },
+    params: { Bucket: string, Key: string },
   ): false {
     if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
       return false
@@ -259,7 +260,7 @@ export class S3StorageProvider implements StorageProvider {
   private enrichFetchError(
     err: any,
     id: AssetId,
-    params: { Bucket: string; Key: string },
+    params: { Bucket: string, Key: string },
   ): Error {
     // Already a user-friendly error — pass through.
     if (err.message?.includes('not found in S3 bucket')) return err

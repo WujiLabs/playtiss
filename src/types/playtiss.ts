@@ -87,8 +87,8 @@ export type Action = Task & {
   scope_id: ScopeId
   name: string
   description: string
-  input_shape: AssetValue
-  output_shape: AssetValue
+  input_schema: AssetValue
+  output_schema: AssetValue
 }
 
 // ==================================================================
@@ -110,8 +110,8 @@ export interface SystemAction {
   id: SystemActionId
   name: string
   description: string
-  input_shape: AssetValue
-  output_shape: AssetValue
+  input_schema: AssetValue
+  output_schema: AssetValue
 }
 
 /**
@@ -153,12 +153,20 @@ export function getSystemActionDefinitions(): Record<SystemActionId, SystemActio
         id: SYSTEM_ACTIONS.CORE_DEFINE_ACTION,
         name: 'core:define_action',
         description: 'Creates a new action definition that can be used to build workflows',
-        input_shape: {
-          name: 'string',
-          description: 'string',
+        input_schema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+          },
+          required: ['name', 'description'],
         },
-        output_shape: {
-          actionId: 'ActionId',
+        output_schema: {
+          type: 'object',
+          properties: {
+            actionId: { type: 'string', format: 'ActionId' },
+          },
+          required: ['actionId'],
         },
       },
 
@@ -166,15 +174,33 @@ export function getSystemActionDefinitions(): Record<SystemActionId, SystemActio
         id: SYSTEM_ACTIONS.CORE_ORCHESTRATE_UPDATE_STALE,
         name: 'core:orchestrate_update_stale',
         description: 'Command task to orchestrate updating all stale nodes in a workflow',
-        input_shape: {
-          wiTaskId: 'TraceId',
-          staleNodeIds: 'string[] | null',
+        input_schema: {
+          type: 'object',
+          properties: {
+            wiTaskId: { type: 'string', format: 'TraceId' },
+            staleNodeIds: {
+              oneOf: [
+                { type: 'array', items: { type: 'string' } },
+                { type: 'null' },
+              ],
+            },
+          },
+          required: ['wiTaskId'],
         },
-        output_shape: {
-          newSnapshotId: 'TraceId',
-          wiTaskId: 'TraceId',
-          staleNodeIds: 'string[] | null',
-          parentSnapshotId: 'TraceId',
+        output_schema: {
+          type: 'object',
+          properties: {
+            newSnapshotId: { type: 'string', format: 'TraceId' },
+            wiTaskId: { type: 'string', format: 'TraceId' },
+            staleNodeIds: {
+              oneOf: [
+                { type: 'array', items: { type: 'string' } },
+                { type: 'null' },
+              ],
+            },
+            parentSnapshotId: { type: 'string', format: 'TraceId' },
+          },
+          required: ['newSnapshotId', 'wiTaskId', 'parentSnapshotId'],
         },
       },
     }

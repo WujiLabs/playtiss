@@ -3,7 +3,8 @@ import fs_sync from 'fs'
 import fs from 'fs/promises'
 import { homedir } from 'os'
 import path from 'path'
-import { isAssetId, type AssetId } from '../../index.js'
+
+import { type AssetId, isAssetId } from '../../index.js'
 import { getConfig, type StorageConfig } from '../config.js'
 import {
   type AssetReferences,

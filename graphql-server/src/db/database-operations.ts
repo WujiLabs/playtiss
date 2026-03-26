@@ -11,28 +11,18 @@
  * - Clean separation allows easy migration to different database systems
  */
 
+import type { Database } from 'better-sqlite3'
 import type { AssetId } from 'playtiss'
 import { default_scope_id } from 'playtiss'
 import type { TraceId } from 'playtiss/types/trace_id'
-import sqlite3 from 'sqlite3'
+
 import { getDB } from '../db.js'
 import { SqliteEventProducer } from '../event-bus/sqlite-producer.js'
-import {
-  runInTransaction,
-  serializeMutation,
-  type TransactionContext,
-  withTransaction,
-} from './mutation-serializer.js'
+import { withTransaction } from './mutation-serializer.js'
 
 // ================================================================
 // INTERNAL OPERATIONS (run within transactions)
 // ================================================================
-
-/**
- * Internal operation context - tracks transaction state.
- * Alias for TransactionContext from mutation-serializer.
- */
-export type InternalOperationContext = TransactionContext
 
 /**
  * Low-level database operations that run within transactions
@@ -42,8 +32,8 @@ export class InternalDatabaseOperations {
   /**
    * Create a task record
    */
-  static async createTask(
-    ctx: InternalOperationContext,
+  static createTask(
+    db: Database,
     data: {
       taskId: TraceId
       scopeId: string
@@ -53,33 +43,26 @@ export class InternalDatabaseOperations {
       description?: string
       timestamp: number
     },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, description, timestamp_created)
+  ): void {
+    db.prepare(
+      `INSERT INTO Tasks (task_id, scope_id, action_id, inputs_content_hash, name, description, timestamp_created)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.taskId,
-          data.scopeId,
-          data.actionId,
-          data.inputsContentHash,
-          data.name,
-          data.description,
-          data.timestamp,
-        ],
-        function (err) {
-          if (err) reject(new Error(`Failed to create task: ${err.message}`))
-          else resolve()
-        },
-      )
-    })
+    ).run(
+      data.taskId,
+      data.scopeId,
+      data.actionId,
+      data.inputsContentHash,
+      data.name,
+      data.description,
+      data.timestamp,
+    )
   }
 
   /**
    * Create a version record
    */
-  static async createVersion(
-    ctx: InternalOperationContext,
+  static createVersion(
+    db: Database,
     data: {
       versionId: TraceId
       taskId: TraceId
@@ -91,98 +74,63 @@ export class InternalDatabaseOperations {
       userTag?: string
       commitMessage?: string
     },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO Versions (version_id, task_id, version_type_tag, asset_content_hash, 
-                               parent_version_id, executed_def_version_id, timestamp_created, 
+  ): void {
+    db.prepare(
+      `INSERT INTO Versions (version_id, task_id, version_type_tag, asset_content_hash,
+                               parent_version_id, executed_def_version_id, timestamp_created,
                                user_given_tag, commit_message)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.versionId,
-          data.taskId,
-          data.versionType,
-          data.assetContentHash,
-          data.parentVersionId,
-          data.executedDefVersionId,
-          data.timestamp,
-          data.userTag,
-          data.commitMessage,
-        ],
-        function (err) {
-          if (err)
-            reject(new Error(`Failed to create version: ${err.message}`))
-          else resolve()
-        },
-      )
-    })
+    ).run(
+      data.versionId,
+      data.taskId,
+      data.versionType,
+      data.assetContentHash,
+      data.parentVersionId,
+      data.executedDefVersionId,
+      data.timestamp,
+      data.userTag,
+      data.commitMessage,
+    )
   }
 
   /**
    * Update task's current version
    */
-  static async updateTaskCurrentVersion(
-    ctx: InternalOperationContext,
+  static updateTaskCurrentVersion(
+    db: Database,
     taskId: TraceId,
     versionId: TraceId,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
-        [versionId, taskId],
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to update task current version: ${err.message}`),
-            )
-          else resolve()
-        },
-      )
-    })
+  ): void {
+    db.prepare(
+      `UPDATE Tasks SET current_version_id = ? WHERE task_id = ?`,
+    ).run(versionId, taskId)
   }
 
   /**
    * Update task's active revision ID (points to latest REVISION version)
    */
-  static async updateTaskActiveRevision(
-    ctx: InternalOperationContext,
+  static updateTaskActiveRevision(
+    db: Database,
     taskId: TraceId,
     revisionId: TraceId,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `UPDATE Tasks SET active_revision_id = ? WHERE task_id = ?`,
-        [revisionId, taskId],
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to update task active revision: ${err.message}`),
-            )
-          else resolve()
-        },
-      )
-    })
+  ): void {
+    db.prepare(
+      `UPDATE Tasks SET active_revision_id = ? WHERE task_id = ?`,
+    ).run(revisionId, taskId)
   }
 
   /**
    * Get active revision ID for a task (O(1) lookup)
    * Returns the latest REVISION version ID for the given task
    */
-  static async getActiveRevisionId(
-    ctx: InternalOperationContext,
+  static getActiveRevisionId(
+    db: Database,
     taskId: TraceId,
-  ): Promise<TraceId | null> {
-    return new Promise((resolve, reject) => {
-      ctx.db.get(
-        `SELECT active_revision_id FROM Tasks WHERE task_id = ?`,
-        [taskId],
-        (err, row: any) => {
-          if (err)
-            reject(new Error(`Failed to get active revision: ${err.message}`))
-          else resolve(row?.active_revision_id || null)
-        },
-      )
-    })
+  ): TraceId | null {
+    const row = db.prepare(
+      `SELECT active_revision_id FROM Tasks WHERE task_id = ?`,
+    ).get(taskId) as any
+    return row?.active_revision_id || null
   }
 
   /**
@@ -199,7 +147,7 @@ export class InternalDatabaseOperations {
    *
    * This minimizes transaction lock time while ensuring consistency.
    *
-   * @param ctx Transaction context (state copy uses ctx.db but not in transaction)
+   * @param db Database instance (state copy uses db but not in transaction)
    * @param data Fork parameters
    */
   /**
@@ -208,17 +156,16 @@ export class InternalDatabaseOperations {
    *
    * v14.1 Update: Also copies PipelineMergeAccumulator to preserve merge node state
    */
-  static async duplicateWorkflowRevisionNodeStates(
-    ctx: InternalOperationContext,
+  static duplicateWorkflowRevisionNodeStates(
+    db: Database,
     data: {
       parentRevisionId: TraceId
       newRevisionId: TraceId
     },
-  ): Promise<void> {
+  ): void {
     // Copy WorkflowRevisionNodeStates
-    await new Promise<void>((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO WorkflowRevisionNodeStates (
+    db.prepare(
+      `INSERT INTO WorkflowRevisionNodeStates (
           workflow_revision_id, node_id_in_workflow, context_asset_hash,
           required_task_id, last_used_version_id, last_inputs_hash,
           dependency_status, runtime_status, error_message, meta_asset_hash
@@ -230,22 +177,11 @@ export class InternalDatabaseOperations {
           dependency_status, runtime_status, error_message, meta_asset_hash
         FROM WorkflowRevisionNodeStates
         WHERE workflow_revision_id = ?`,
-        [data.newRevisionId, data.parentRevisionId],
-        function (err) {
-          if (err)
-            reject(
-              new Error(
-                `Failed to copy workflow revision node states: ${err.message}`,
-              ),
-            )
-          else resolve()
-        },
-      )
-    })
+    ).run(data.newRevisionId, data.parentRevisionId)
 
     // Copy PipelineMergeAccumulator (v14.1 - preserve merge node state on fork)
-    await new Promise<void>((resolve) => {
-      ctx.db.run(
+    try {
+      db.prepare(
         `INSERT INTO PipelineMergeAccumulator (
           pipeline_id, workflow_revision_id, context_asset_hash, node_id,
           accumulator_json, created_at, updated_at
@@ -258,61 +194,44 @@ export class InternalDatabaseOperations {
           strftime('%s', 'now') AS updated_at
         FROM PipelineMergeAccumulator
         WHERE workflow_revision_id = ?`,
-        [data.newRevisionId, data.parentRevisionId],
-        function (err) {
-          // Ignore errors if no merge accumulator exists (this is optional data)
-          if (err) {
-            console.warn(
-              `Note: Could not copy merge accumulator (might not exist): ${err.message}`,
-            )
-          }
-          // Always resolve - merge accumulator copy is optional
-          resolve()
-        },
+      ).run(data.newRevisionId, data.parentRevisionId)
+    }
+    catch (err: any) {
+      // Ignore errors if no merge accumulator exists (this is optional data)
+      console.warn(
+        `Note: Could not copy merge accumulator (might not exist): ${err.message}`,
       )
-    })
+    }
   }
 
   /**
    * Update node runtime status (preserves dependency status)
    * Used by player input mutations and rerun operations
    */
-  static async updateNodeRuntimeStatus(
-    ctx: InternalOperationContext,
+  static updateNodeRuntimeStatus(
+    db: Database,
     data: {
       workflowRevisionId: TraceId
       nodeId: string
       contextAssetHash: AssetId
       runtimeStatus: 'IDLE' | 'RUNNING' | 'FAILED'
     },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `UPDATE WorkflowRevisionNodeStates
+  ): void {
+    const result = db.prepare(
+      `UPDATE WorkflowRevisionNodeStates
          SET runtime_status = ?
          WHERE workflow_revision_id = ? AND node_id_in_workflow = ? AND context_asset_hash = ?`,
-        [
-          data.runtimeStatus,
-          data.workflowRevisionId,
-          data.nodeId,
-          data.contextAssetHash,
-        ],
-        function (err) {
-          if (err)
-            return reject(
-              new Error(`Failed to update node runtime status: ${err.message}`),
-            )
-          if (this.changes === 0) {
-            return reject(
-              new Error(
-                `Node ${data.nodeId} not found in workflow revision ${data.workflowRevisionId}`,
-              ),
-            )
-          }
-          resolve()
-        },
+    ).run(
+      data.runtimeStatus,
+      data.workflowRevisionId,
+      data.nodeId,
+      data.contextAssetHash,
+    )
+    if (result.changes === 0) {
+      throw new Error(
+        `Node ${data.nodeId} not found in workflow revision ${data.workflowRevisionId}`,
       )
-    })
+    }
   }
 
   /**
@@ -320,8 +239,8 @@ export class InternalDatabaseOperations {
    * Creates Versions record and updates Tasks.current_version_id pointer
    * Assumes caller has already begun transaction
    */
-  static async finalizeRevisionFork(
-    ctx: InternalOperationContext,
+  static finalizeRevisionFork(
+    db: Database,
     data: {
       taskId: TraceId
       parentRevisionId: TraceId
@@ -330,51 +249,33 @@ export class InternalDatabaseOperations {
       commitMessage?: string
       triggerReason?: string
     },
-  ): Promise<void> {
+  ): void {
     // Create Versions record
-    await new Promise<void>((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO Versions (
+    db.prepare(
+      `INSERT INTO Versions (
           version_id, task_id, version_type_tag,
           parent_version_id, timestamp_created, commit_message
         ) VALUES (?, ?, 'REVISION', ?, ?, ?)`,
-        [
-          data.newRevisionId,
-          data.taskId,
-          data.parentRevisionId,
-          data.timestamp,
-          data.commitMessage || data.triggerReason || 'Revision fork',
-        ],
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to create revision version: ${err.message}`),
-            )
-          else resolve()
-        },
-      )
-    })
+    ).run(
+      data.newRevisionId,
+      data.taskId,
+      data.parentRevisionId,
+      data.timestamp,
+      data.commitMessage || data.triggerReason || 'Revision fork',
+    )
 
     // Update Tasks.current_version_id AND active_revision_id pointers
     // Both point to the new revision since this is a fork operation
-    await new Promise<void>((resolve, reject) => {
-      ctx.db.run(
-        `UPDATE Tasks SET current_version_id = ?, active_revision_id = ? WHERE task_id = ?`,
-        [data.newRevisionId, data.newRevisionId, data.taskId],
-        function (err) {
-          if (err)
-            reject(new Error(`Failed to update task pointers: ${err.message}`))
-          else resolve()
-        },
-      )
-    })
+    db.prepare(
+      `UPDATE Tasks SET current_version_id = ?, active_revision_id = ? WHERE task_id = ?`,
+    ).run(data.newRevisionId, data.newRevisionId, data.taskId)
   }
 
   /**
    * Create task execution state
    */
-  static async createTaskExecutionState(
-    ctx: InternalOperationContext,
+  static createTaskExecutionState(
+    db: Database,
     data: {
       taskId: TraceId
       actionId: string
@@ -384,37 +285,27 @@ export class InternalDatabaseOperations {
       claimTtlSeconds?: number
       expirationTime?: number
     },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO TaskExecutionStates (task_id, action_id, runtime_status, claim_timestamp, 
+  ): void {
+    db.prepare(
+      `INSERT INTO TaskExecutionStates (task_id, action_id, runtime_status, claim_timestamp,
                                          claim_worker_id, claim_ttl_seconds, expiration_time)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.taskId,
-          data.actionId,
-          data.runtimeStatus,
-          data.claimTimestamp,
-          data.claimWorkerId,
-          data.claimTtlSeconds,
-          data.expirationTime,
-        ],
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to create task execution state: ${err.message}`),
-            )
-          else resolve()
-        },
-      )
-    })
+    ).run(
+      data.taskId,
+      data.actionId,
+      data.runtimeStatus,
+      data.claimTimestamp,
+      data.claimWorkerId,
+      data.claimTtlSeconds,
+      data.expirationTime,
+    )
   }
 
   /**
    * Update task execution state with worker verification (for completing tasks)
    */
-  static async updateTaskExecutionStateWithWorkerCheck(
-    ctx: InternalOperationContext,
+  static updateTaskExecutionStateWithWorkerCheck(
+    db: Database,
     taskId: TraceId,
     workerId: string,
     updates: {
@@ -424,61 +315,53 @@ export class InternalDatabaseOperations {
       claimTtlSeconds?: number | null
       expirationTime?: number | null
     },
-  ): Promise<{ changedRows: number }> {
-    return new Promise((resolve, reject) => {
-      const setParts: string[] = []
-      const values: any[] = []
+  ): { changedRows: number } {
+    const setParts: string[] = []
+    const values: any[] = []
 
-      if (updates.runtimeStatus !== undefined) {
-        setParts.push('runtime_status = ?')
-        values.push(updates.runtimeStatus)
-      }
-      if (updates.claimTimestamp !== undefined) {
-        setParts.push('claim_timestamp = ?')
-        values.push(updates.claimTimestamp)
-      }
-      if (updates.claimWorkerId !== undefined) {
-        setParts.push('claim_worker_id = ?')
-        values.push(updates.claimWorkerId)
-      }
-      if (updates.claimTtlSeconds !== undefined) {
-        setParts.push('claim_ttl_seconds = ?')
-        values.push(updates.claimTtlSeconds)
-      }
-      if (updates.expirationTime !== undefined) {
-        setParts.push('expiration_time = ?')
-        values.push(updates.expirationTime)
-      }
+    if (updates.runtimeStatus !== undefined) {
+      setParts.push('runtime_status = ?')
+      values.push(updates.runtimeStatus)
+    }
+    if (updates.claimTimestamp !== undefined) {
+      setParts.push('claim_timestamp = ?')
+      values.push(updates.claimTimestamp)
+    }
+    if (updates.claimWorkerId !== undefined) {
+      setParts.push('claim_worker_id = ?')
+      values.push(updates.claimWorkerId)
+    }
+    if (updates.claimTtlSeconds !== undefined) {
+      setParts.push('claim_ttl_seconds = ?')
+      values.push(updates.claimTtlSeconds)
+    }
+    if (updates.expirationTime !== undefined) {
+      setParts.push('expiration_time = ?')
+      values.push(updates.expirationTime)
+    }
 
-      if (setParts.length === 0) {
-        return resolve({ changedRows: 0 })
-      }
+    if (setParts.length === 0) {
+      return { changedRows: 0 }
+    }
 
-      // Add WHERE clause to verify worker ownership and lease hasn't expired
-      values.push(taskId)
-      values.push(workerId)
-      values.push(Date.now()) // Current timestamp to check expiration
+    // Add WHERE clause to verify worker ownership and lease hasn't expired
+    values.push(taskId)
+    values.push(workerId)
+    values.push(Date.now()) // Current timestamp to check expiration
 
-      ctx.db.run(
-        `UPDATE TaskExecutionStates SET ${setParts.join(', ')} 
+    const result = db.prepare(
+      `UPDATE TaskExecutionStates SET ${setParts.join(', ')}
          WHERE task_id = ? AND claim_worker_id = ? AND expiration_time > ?`,
-        values,
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to update task execution state: ${err.message}`),
-            )
-          else resolve({ changedRows: this.changes })
-        },
-      )
-    })
+    ).run(...values)
+
+    return { changedRows: result.changes }
   }
 
   /**
    * Update task execution state (for claiming/completing tasks)
    */
-  static async updateTaskExecutionState(
-    ctx: InternalOperationContext,
+  static updateTaskExecutionState(
+    db: Database,
     taskId: TraceId,
     updates: {
       runtimeStatus?: string
@@ -487,57 +370,49 @@ export class InternalDatabaseOperations {
       claimTtlSeconds?: number | null
       expirationTime?: number | null
     },
-  ): Promise<{ changedRows: number }> {
-    return new Promise((resolve, reject) => {
-      const setParts: string[] = []
-      const values: any[] = []
+  ): { changedRows: number } {
+    const setParts: string[] = []
+    const values: any[] = []
 
-      if (updates.runtimeStatus !== undefined) {
-        setParts.push('runtime_status = ?')
-        values.push(updates.runtimeStatus)
-      }
-      if (updates.claimTimestamp !== undefined) {
-        setParts.push('claim_timestamp = ?')
-        values.push(updates.claimTimestamp)
-      }
-      if (updates.claimWorkerId !== undefined) {
-        setParts.push('claim_worker_id = ?')
-        values.push(updates.claimWorkerId)
-      }
-      if (updates.claimTtlSeconds !== undefined) {
-        setParts.push('claim_ttl_seconds = ?')
-        values.push(updates.claimTtlSeconds)
-      }
-      if (updates.expirationTime !== undefined) {
-        setParts.push('expiration_time = ?')
-        values.push(updates.expirationTime)
-      }
+    if (updates.runtimeStatus !== undefined) {
+      setParts.push('runtime_status = ?')
+      values.push(updates.runtimeStatus)
+    }
+    if (updates.claimTimestamp !== undefined) {
+      setParts.push('claim_timestamp = ?')
+      values.push(updates.claimTimestamp)
+    }
+    if (updates.claimWorkerId !== undefined) {
+      setParts.push('claim_worker_id = ?')
+      values.push(updates.claimWorkerId)
+    }
+    if (updates.claimTtlSeconds !== undefined) {
+      setParts.push('claim_ttl_seconds = ?')
+      values.push(updates.claimTtlSeconds)
+    }
+    if (updates.expirationTime !== undefined) {
+      setParts.push('expiration_time = ?')
+      values.push(updates.expirationTime)
+    }
 
-      if (setParts.length === 0) {
-        return resolve({ changedRows: 0 })
-      }
+    if (setParts.length === 0) {
+      return { changedRows: 0 }
+    }
 
-      values.push(taskId)
+    values.push(taskId)
 
-      ctx.db.run(
-        `UPDATE TaskExecutionStates SET ${setParts.join(', ')} WHERE task_id = ?`,
-        values,
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to update task execution state: ${err.message}`),
-            )
-          else resolve({ changedRows: this.changes })
-        },
-      )
-    })
+    const result = db.prepare(
+      `UPDATE TaskExecutionStates SET ${setParts.join(', ')} WHERE task_id = ?`,
+    ).run(...values)
+
+    return { changedRows: result.changes }
   }
 
   /**
    * Update task execution state with status check (for refresh operations)
    */
-  static async updateTaskExecutionStateWithStatusCheck(
-    ctx: InternalOperationContext,
+  static updateTaskExecutionStateWithStatusCheck(
+    db: Database,
     taskId: TraceId,
     fromStatuses: string[],
     updates: {
@@ -547,63 +422,53 @@ export class InternalDatabaseOperations {
       claimTtlSeconds?: number | null
       expirationTime?: number | null
     },
-  ): Promise<{ changedRows: number }> {
-    return new Promise((resolve, reject) => {
-      const setParts: string[] = []
-      const values: any[] = []
+  ): { changedRows: number } {
+    const setParts: string[] = []
+    const values: any[] = []
 
-      if (updates.runtimeStatus !== undefined) {
-        setParts.push('runtime_status = ?')
-        values.push(updates.runtimeStatus)
-      }
-      if (updates.claimTimestamp !== undefined) {
-        setParts.push('claim_timestamp = ?')
-        values.push(updates.claimTimestamp)
-      }
-      if (updates.claimWorkerId !== undefined) {
-        setParts.push('claim_worker_id = ?')
-        values.push(updates.claimWorkerId)
-      }
-      if (updates.claimTtlSeconds !== undefined) {
-        setParts.push('claim_ttl_seconds = ?')
-        values.push(updates.claimTtlSeconds)
-      }
-      if (updates.expirationTime !== undefined) {
-        setParts.push('expiration_time = ?')
-        values.push(updates.expirationTime)
-      }
+    if (updates.runtimeStatus !== undefined) {
+      setParts.push('runtime_status = ?')
+      values.push(updates.runtimeStatus)
+    }
+    if (updates.claimTimestamp !== undefined) {
+      setParts.push('claim_timestamp = ?')
+      values.push(updates.claimTimestamp)
+    }
+    if (updates.claimWorkerId !== undefined) {
+      setParts.push('claim_worker_id = ?')
+      values.push(updates.claimWorkerId)
+    }
+    if (updates.claimTtlSeconds !== undefined) {
+      setParts.push('claim_ttl_seconds = ?')
+      values.push(updates.claimTtlSeconds)
+    }
+    if (updates.expirationTime !== undefined) {
+      setParts.push('expiration_time = ?')
+      values.push(updates.expirationTime)
+    }
 
-      if (setParts.length === 0) {
-        return resolve({ changedRows: 0 })
-      }
+    if (setParts.length === 0) {
+      return { changedRows: 0 }
+    }
 
-      // Add WHERE clause to check current status is one of the allowed states
-      const statusPlaceholders = fromStatuses.map(() => '?').join(', ')
-      values.push(taskId)
-      values.push(...fromStatuses)
+    // Add WHERE clause to check current status is one of the allowed states
+    const statusPlaceholders = fromStatuses.map(() => '?').join(', ')
+    values.push(taskId)
+    values.push(...fromStatuses)
 
-      ctx.db.run(
-        `UPDATE TaskExecutionStates SET ${setParts.join(', ')}
+    const result = db.prepare(
+      `UPDATE TaskExecutionStates SET ${setParts.join(', ')}
          WHERE task_id = ? AND runtime_status IN (${statusPlaceholders})`,
-        values,
-        function (err) {
-          if (err)
-            reject(
-              new Error(
-                `Failed to update task execution state with status check: ${err.message}`,
-              ),
-            )
-          else resolve({ changedRows: this.changes })
-        },
-      )
-    })
+    ).run(...values)
+
+    return { changedRows: result.changes }
   }
 
   /**
    * Update task execution state for claiming (with claim eligibility check)
    */
-  static async updateTaskExecutionStateForClaim(
-    ctx: InternalOperationContext,
+  static updateTaskExecutionStateForClaim(
+    db: Database,
     taskId: TraceId,
     workerId: string,
     updates: {
@@ -613,62 +478,54 @@ export class InternalDatabaseOperations {
       claimTtlSeconds?: number
       expirationTime?: number
     },
-  ): Promise<{ changedRows: number }> {
-    return new Promise((resolve, reject) => {
-      const setParts: string[] = []
-      const values: any[] = []
+  ): { changedRows: number } {
+    const setParts: string[] = []
+    const values: any[] = []
 
-      if (updates.runtimeStatus !== undefined) {
-        setParts.push('runtime_status = ?')
-        values.push(updates.runtimeStatus)
-      }
-      if (updates.claimTimestamp !== undefined) {
-        setParts.push('claim_timestamp = ?')
-        values.push(updates.claimTimestamp)
-      }
-      if (updates.claimWorkerId !== undefined) {
-        setParts.push('claim_worker_id = ?')
-        values.push(updates.claimWorkerId)
-      }
-      if (updates.claimTtlSeconds !== undefined) {
-        setParts.push('claim_ttl_seconds = ?')
-        values.push(updates.claimTtlSeconds)
-      }
-      if (updates.expirationTime !== undefined) {
-        setParts.push('expiration_time = ?')
-        values.push(updates.expirationTime)
-      }
+    if (updates.runtimeStatus !== undefined) {
+      setParts.push('runtime_status = ?')
+      values.push(updates.runtimeStatus)
+    }
+    if (updates.claimTimestamp !== undefined) {
+      setParts.push('claim_timestamp = ?')
+      values.push(updates.claimTimestamp)
+    }
+    if (updates.claimWorkerId !== undefined) {
+      setParts.push('claim_worker_id = ?')
+      values.push(updates.claimWorkerId)
+    }
+    if (updates.claimTtlSeconds !== undefined) {
+      setParts.push('claim_ttl_seconds = ?')
+      values.push(updates.claimTtlSeconds)
+    }
+    if (updates.expirationTime !== undefined) {
+      setParts.push('expiration_time = ?')
+      values.push(updates.expirationTime)
+    }
 
-      if (setParts.length === 0) {
-        return resolve({ changedRows: 0 })
-      }
+    if (setParts.length === 0) {
+      return { changedRows: 0 }
+    }
 
-      const currentTime = updates.claimTimestamp || Date.now()
-      values.push(taskId, currentTime, workerId, currentTime)
+    const currentTime = updates.claimTimestamp || Date.now()
+    values.push(taskId, currentTime, workerId, currentTime)
 
-      ctx.db.run(
-        `UPDATE TaskExecutionStates SET ${setParts.join(', ')}
-         WHERE task_id = ? 
-         AND (runtime_status = 'PENDING' OR 
+    const result = db.prepare(
+      `UPDATE TaskExecutionStates SET ${setParts.join(', ')}
+         WHERE task_id = ?
+         AND (runtime_status = 'PENDING' OR
               (runtime_status = 'RUNNING' AND claim_timestamp IS NOT NULL AND (? - claim_timestamp) / 1000.0 > claim_ttl_seconds) OR
               (runtime_status = 'RUNNING' AND claim_worker_id = ? AND claim_timestamp IS NOT NULL AND (? - claim_timestamp) / 1000.0 <= claim_ttl_seconds))`,
-        values,
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to claim task execution state: ${err.message}`),
-            )
-          else resolve({ changedRows: this.changes })
-        },
-      )
-    })
+    ).run(...values)
+
+    return { changedRows: result.changes }
   }
 
   /**
    * Create execution handle
    */
-  static async createExecutionHandle(
-    ctx: InternalOperationContext,
+  static createExecutionHandle(
+    db: Database,
     data: {
       handleId: TraceId
       taskId: TraceId
@@ -676,100 +533,62 @@ export class InternalDatabaseOperations {
       createdBy: string
       description?: string
     },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      ctx.db.run(
-        `INSERT INTO ExecutionHandles (handle_id, task_id, created_at, created_by, description)
+  ): void {
+    db.prepare(
+      `INSERT INTO ExecutionHandles (handle_id, task_id, created_at, created_by, description)
          VALUES (?, ?, ?, ?, ?)`,
-        [
-          data.handleId,
-          data.taskId,
-          data.createdAt,
-          data.createdBy,
-          data.description,
-        ],
-        function (err) {
-          if (err)
-            reject(
-              new Error(`Failed to create execution handle: ${err.message}`),
-            )
-          else resolve()
-        },
-      )
-    })
+    ).run(
+      data.handleId,
+      data.taskId,
+      data.createdAt,
+      data.createdBy,
+      data.description,
+    )
   }
 
   /**
    * Query operations (can be used both internally and externally)
    */
 
-  static async getTask(db: sqlite3.Database, taskId: TraceId): Promise<any> {
-    return new Promise((resolve, reject) => {
-      db.get(`SELECT * FROM Tasks WHERE task_id = ?`, [taskId], (err, row) => {
-        if (err) reject(new Error(`Failed to get task: ${err.message}`))
-        else resolve(row)
-      })
-    })
+  static getTask(db: Database, taskId: TraceId): any {
+    return db.prepare(`SELECT * FROM Tasks WHERE task_id = ?`).get(taskId)
   }
 
-  static async getVersion(
-    db: sqlite3.Database,
+  static getVersion(
+    db: Database,
     versionId: TraceId,
-  ): Promise<any> {
-    return new Promise((resolve, reject) => {
-      db.get(
-        `SELECT * FROM Versions WHERE version_id = ?`,
-        [versionId],
-        (err, row) => {
-          if (err) reject(new Error(`Failed to get version: ${err.message}`))
-          else resolve(row)
-        },
-      )
-    })
+  ): any {
+    return db.prepare(
+      `SELECT * FROM Versions WHERE version_id = ?`,
+    ).get(versionId)
   }
 
-  static async getTaskExecutionState(
-    db: sqlite3.Database,
+  static getTaskExecutionState(
+    db: Database,
     taskId: TraceId,
-  ): Promise<any> {
-    return new Promise((resolve, reject) => {
-      db.get(
-        `SELECT * FROM TaskExecutionStates WHERE task_id = ?`,
-        [taskId],
-        (err, row) => {
-          if (err)
-            reject(
-              new Error(`Failed to get task execution state: ${err.message}`),
-            )
-          else resolve(row)
-        },
-      )
-    })
+  ): any {
+    return db.prepare(
+      `SELECT * FROM TaskExecutionStates WHERE task_id = ?`,
+    ).get(taskId)
   }
 
   /**
    * Fetch existing task by uniqueness parameters (scope, action, inputs hash)
    * Used for idempotent task creation and race condition handling
    */
-  static async fetchTaskByUniqueness(
-    db: sqlite3.Database,
+  static fetchTaskByUniqueness(
+    db: Database,
     actionId: string,
     uniquenessHash: AssetId,
-  ): Promise<any | null> {
-    return new Promise((resolve, reject) => {
-      db.get(
-        `SELECT t.task_id, t.action_id, t.name, t.description, t.timestamp_created, t.current_version_id,
+  ): any | null {
+    const row = db.prepare(
+      `SELECT t.task_id, t.action_id, t.name, t.description, t.timestamp_created, t.current_version_id,
                 v.version_id, v.version_type_tag, v.asset_content_hash, v.timestamp_created as version_timestamp, v.commit_message
          FROM Tasks t
          LEFT JOIN Versions v ON t.current_version_id = v.version_id
          WHERE t.scope_id = ? AND t.action_id = ? AND t.inputs_content_hash = ?`,
-        [default_scope_id, actionId, uniquenessHash],
-        (err, row) => {
-          if (err) reject(err)
-          else resolve(row || null)
-        },
-      )
-    })
+    ).get(default_scope_id, actionId, uniquenessHash)
+    return row || null
   }
 }
 
@@ -786,50 +605,50 @@ export class ExternalDatabaseMutations {
    * Claim a workflow task and generate revision version
    * This is an external mutation that manages its own transaction
    */
-  static async claimWorkflowTask(
+  static claimWorkflowTask(
     taskId: TraceId,
     workerId: string,
     ttl: number,
     revisionVersionId: TraceId,
     timestamp: number,
-  ): Promise<{
+  ): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp: number
     claimWorkerId: string
     claimTtlSeconds: number
-  }> {
-    return withTransaction('claimWorkflowTask', ctx =>
-      executeClaimWorkflowTaskInternal(ctx, taskId, workerId, ttl, revisionVersionId, timestamp),
+  } {
+    return withTransaction('claimWorkflowTask', db =>
+      executeClaimWorkflowTaskInternal(db, taskId, workerId, ttl, revisionVersionId, timestamp),
     )
   }
 
   /**
    * Create a computational task and schedule for execution
    */
-  static async createComputationalTask(
+  static createComputationalTask(
     actionId: string,
     uniquenessHash: AssetId,
     taskId: TraceId,
     timestamp: number,
-  ): Promise<{ id: TraceId, actionId: string, inputsContentHash: string }> {
-    return withTransaction('createComputationalTask', ctx =>
-      executeCreateComputationalTaskInternal(ctx, actionId, uniquenessHash, taskId, timestamp),
+  ): { id: TraceId, actionId: string, inputsContentHash: string } {
+    return withTransaction('createComputationalTask', db =>
+      executeCreateComputationalTaskInternal(db, actionId, uniquenessHash, taskId, timestamp),
     )
   }
 
   /**
    * Request execution and return handle ID
    */
-  static async requestExecution(
+  static requestExecution(
     actionId: string,
     inputAssetId: AssetId,
     handleId: TraceId,
     workflowInstanceTaskId: TraceId,
     timestamp: number,
-  ): Promise<TraceId> {
-    return withTransaction('requestExecution', async (ctx) => {
-      await executeRequestExecutionInternal(ctx, actionId, inputAssetId, handleId, workflowInstanceTaskId, timestamp)
+  ): TraceId {
+    return withTransaction('requestExecution', (db) => {
+      executeRequestExecutionInternal(db, actionId, inputAssetId, handleId, workflowInstanceTaskId, timestamp)
       return handleId
     })
   }
@@ -837,79 +656,79 @@ export class ExternalDatabaseMutations {
   /**
    * Claim a regular computational task
    */
-  static async claimTask(
+  static claimTask(
     taskId: TraceId,
     workerId: string,
     ttl: number,
-  ): Promise<{
+  ): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp: number
     claimWorkerId: string
     claimTtlSeconds: number
-  }> {
-    return withTransaction('claimTask', ctx =>
-      executeClaimTaskInternal(ctx, taskId, workerId, ttl),
+  } {
+    return withTransaction('claimTask', db =>
+      executeClaimTaskInternal(db, taskId, workerId, ttl),
     )
   }
 
   /**
    * Report task success
    */
-  static async reportTaskSuccess(
+  static reportTaskSuccess(
     taskId: TraceId,
     resultVersionId: TraceId,
     workerId: string,
-  ): Promise<{
+  ): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp: number
     claimWorkerId: string
     claimTtlSeconds: number
-  }> {
-    return withTransaction('reportTaskSuccess', ctx =>
-      executeReportTaskSuccessInternal(ctx, taskId, resultVersionId, workerId),
+  } {
+    return withTransaction('reportTaskSuccess', db =>
+      executeReportTaskSuccessInternal(db, taskId, resultVersionId, workerId),
     )
   }
 
   /**
    * Report task failure
    */
-  static async reportTaskFailure(
+  static reportTaskFailure(
     taskId: TraceId,
     errorVersionId: TraceId,
     workerId: string,
-  ): Promise<{
+  ): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp: number
     claimWorkerId: string
     claimTtlSeconds: number
-  }> {
-    return withTransaction('reportTaskFailure', ctx =>
-      executeReportTaskFailureInternal(ctx, taskId, errorVersionId, workerId),
+  } {
+    return withTransaction('reportTaskFailure', db =>
+      executeReportTaskFailureInternal(db, taskId, errorVersionId, workerId),
     )
   }
 
   /**
    * Schedule task for execution
    */
-  static async scheduleTaskForExecution(taskId: TraceId): Promise<{
+  static scheduleTaskForExecution(taskId: TraceId): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp?: number
     claimWorkerId?: string
     claimTtlSeconds?: number
-  }> {
-    return withTransaction('scheduleTaskForExecution', ctx =>
-      executeScheduleTaskForExecutionInternal(ctx, taskId),
+  } {
+    return withTransaction('scheduleTaskForExecution', db =>
+      executeScheduleTaskForExecutionInternal(db, taskId),
     )
   }
 
   /**
    * Update node states in workflow
    */
-  static async updateNodeStates(
+  static updateNodeStates(
     revisionId: TraceId,
     nodeUpdates: Array<{
       nodeId: string
@@ -919,24 +738,24 @@ export class ExternalDatabaseMutations {
       requiredTaskId?: TraceId
       lastInputsHash?: AssetId
     }>,
-  ): Promise<{ id: TraceId, status: string, createdAt: number, nodes: any[] }> {
-    return withTransaction('updateNodeStates', ctx =>
-      executeUpdateNodeStatesInternal(ctx, revisionId, nodeUpdates),
+  ): { id: TraceId, status: string, createdAt: number, nodes: any[] } {
+    return withTransaction('updateNodeStates', db =>
+      executeUpdateNodeStatesInternal(db, revisionId, nodeUpdates),
     )
   }
 
   /**
    * Refresh task - reset SUCCEEDED or FAILED task back to PENDING
    */
-  static async refreshTask(taskId: TraceId): Promise<{
+  static refreshTask(taskId: TraceId): {
     taskId: TraceId
     runtimeStatus: string
     claimTimestamp: number | null
     claimWorkerId: string | null
     claimTtlSeconds: number | null
-  }> {
-    return withTransaction('refreshTask', ctx =>
-      executeRefreshTaskInternal(ctx, taskId),
+  } {
+    return withTransaction('refreshTask', db =>
+      executeRefreshTaskInternal(db, taskId),
     )
   }
 
@@ -952,40 +771,22 @@ export class ExternalDatabaseMutations {
    * - Pointer updates: Atomic transaction for Versions + Tasks updates
    *
    * @param data Fork parameters
-   * @returns Promise<TraceId> New revision ID
+   * @returns New revision ID
    */
-  static async forkRevision(data: {
+  static forkRevision(data: {
     taskId: TraceId
     parentRevisionId: TraceId
     newRevisionId: TraceId
     timestamp: number
     commitMessage?: string
     triggerReason?: string
-  }): Promise<TraceId> {
-    // Mixed pattern: non-transactional state copy + transactional finalization,
-    // both serialized. Uses serializeMutation + runInTransaction instead of
-    // withTransaction because only part 2 needs a transaction.
-    return serializeMutation('forkRevision', async () => {
-      const db = getDB()
-      const ctx: InternalOperationContext = {
-        db,
-        transactionId: 'forkRevision',
-      }
-
-      // Part 1: Duplicate node states (outside transaction, but serialized)
-      await InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(
-        ctx,
-        {
-          parentRevisionId: data.parentRevisionId,
-          newRevisionId: data.newRevisionId,
-        },
-      )
-
-      // Part 2: Finalize fork in transaction
-      await runInTransaction(db, 'forkRevision_txn', txCtx =>
-        InternalDatabaseOperations.finalizeRevisionFork(txCtx, data),
-      )
-
+  }): TraceId {
+    return withTransaction('forkRevision', (db) => {
+      InternalDatabaseOperations.duplicateWorkflowRevisionNodeStates(db, {
+        parentRevisionId: data.parentRevisionId,
+        newRevisionId: data.newRevisionId,
+      })
+      InternalDatabaseOperations.finalizeRevisionFork(db, data)
       return data.newRevisionId
     })
   }
@@ -999,29 +800,29 @@ export class ExternalDatabaseMutations {
  * Internal implementation of workflow task claiming
  * Uses only internal operations - no transaction management
  */
-async function executeClaimWorkflowTaskInternal(
-  ctx: InternalOperationContext,
+function executeClaimWorkflowTaskInternal(
+  db: Database,
   taskId: TraceId,
   workerId: string,
   ttl: number,
   revisionVersionId: TraceId,
   timestamp: number,
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp: number
   claimWorkerId: string
   claimTtlSeconds: number
-}> {
+} {
   // 1. Verify this is a workflow task by checking if the action has a current workflow definition
-  const task = await InternalDatabaseOperations.getTask(ctx.db, taskId)
+  const task = InternalDatabaseOperations.getTask(db, taskId)
   if (!task) {
     throw new Error(`Task ${taskId} not found`)
   }
 
   // Get the action task to check if it has a workflow definition
-  const actionTask = await InternalDatabaseOperations.getTask(
-    ctx.db,
+  const actionTask = InternalDatabaseOperations.getTask(
+    db,
     task.action_id as TraceId,
   )
   if (!actionTask) {
@@ -1036,8 +837,8 @@ async function executeClaimWorkflowTaskInternal(
   }
 
   // Verify the current version is a workflow definition
-  const actionVersion = await InternalDatabaseOperations.getVersion(
-    ctx.db,
+  const actionVersion = InternalDatabaseOperations.getVersion(
+    db,
     actionTask.current_version_id as TraceId,
   )
   if (
@@ -1054,8 +855,8 @@ async function executeClaimWorkflowTaskInternal(
   const expirationTime = now + ttl * 1000
 
   const { changedRows }
-    = await InternalDatabaseOperations.updateTaskExecutionStateForClaim(
-      ctx,
+    = InternalDatabaseOperations.updateTaskExecutionStateForClaim(
+      db,
       taskId,
       workerId,
       {
@@ -1069,8 +870,8 @@ async function executeClaimWorkflowTaskInternal(
 
   if (changedRows === 0) {
     // Get current state to provide better error information
-    const currentState = await InternalDatabaseOperations.getTaskExecutionState(
-      ctx.db,
+    const currentState = InternalDatabaseOperations.getTaskExecutionState(
+      db,
       taskId,
     )
     if (!currentState) {
@@ -1082,7 +883,7 @@ async function executeClaimWorkflowTaskInternal(
   }
 
   // 3. Create revision version
-  await InternalDatabaseOperations.createVersion(ctx, {
+  InternalDatabaseOperations.createVersion(db, {
     versionId: revisionVersionId,
     taskId: taskId,
     versionType: 'REVISION',
@@ -1093,13 +894,13 @@ async function executeClaimWorkflowTaskInternal(
   })
 
   // 4. Update task's current version and active revision to point to new revision
-  await InternalDatabaseOperations.updateTaskCurrentVersion(
-    ctx,
+  InternalDatabaseOperations.updateTaskCurrentVersion(
+    db,
     taskId,
     revisionVersionId,
   )
-  await InternalDatabaseOperations.updateTaskActiveRevision(
-    ctx,
+  InternalDatabaseOperations.updateTaskActiveRevision(
+    db,
     taskId,
     revisionVersionId,
   )
@@ -1116,15 +917,15 @@ async function executeClaimWorkflowTaskInternal(
 /**
  * Internal implementation of computational task creation
  */
-async function executeCreateComputationalTaskInternal(
-  ctx: InternalOperationContext,
+function executeCreateComputationalTaskInternal(
+  db: Database,
   actionId: string,
   uniquenessHash: AssetId,
   taskId: TraceId,
   timestamp: number,
-): Promise<{ id: TraceId, actionId: string, inputsContentHash: string }> {
+): { id: TraceId, actionId: string, inputsContentHash: string } {
   // 1. Create the task
-  await InternalDatabaseOperations.createTask(ctx, {
+  InternalDatabaseOperations.createTask(db, {
     taskId: taskId,
     scopeId: default_scope_id,
     actionId: actionId,
@@ -1134,7 +935,7 @@ async function executeCreateComputationalTaskInternal(
   })
 
   // 2. Create execution state
-  await InternalDatabaseOperations.createTaskExecutionState(ctx, {
+  InternalDatabaseOperations.createTaskExecutionState(db, {
     taskId: taskId,
     actionId: actionId,
     runtimeStatus: 'PENDING',
@@ -1150,16 +951,16 @@ async function executeCreateComputationalTaskInternal(
 /**
  * Internal implementation of request execution
  */
-async function executeRequestExecutionInternal(
-  ctx: InternalOperationContext,
+function executeRequestExecutionInternal(
+  db: Database,
   actionId: string,
   inputAssetId: AssetId,
   handleId: TraceId,
   workflowInstanceTaskId: TraceId,
   timestamp: number,
-): Promise<void> {
+): void {
   // 1. Create execution handle
-  await InternalDatabaseOperations.createExecutionHandle(ctx, {
+  InternalDatabaseOperations.createExecutionHandle(db, {
     handleId: handleId,
     taskId: workflowInstanceTaskId,
     createdAt: timestamp,
@@ -1168,7 +969,7 @@ async function executeRequestExecutionInternal(
   })
 
   // 2. Create WI task
-  await InternalDatabaseOperations.createTask(ctx, {
+  InternalDatabaseOperations.createTask(db, {
     taskId: workflowInstanceTaskId,
     scopeId: default_scope_id,
     actionId: actionId,
@@ -1179,7 +980,7 @@ async function executeRequestExecutionInternal(
   })
 
   // 3. Create execution state
-  await InternalDatabaseOperations.createTaskExecutionState(ctx, {
+  InternalDatabaseOperations.createTaskExecutionState(db, {
     taskId: workflowInstanceTaskId,
     actionId: actionId,
     runtimeStatus: 'PENDING',
@@ -1189,25 +990,25 @@ async function executeRequestExecutionInternal(
 /**
  * Internal implementation of regular task claiming
  */
-async function executeClaimTaskInternal(
-  ctx: InternalOperationContext,
+function executeClaimTaskInternal(
+  db: Database,
   taskId: TraceId,
   workerId: string,
   ttl: number,
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp: number
   claimWorkerId: string
   claimTtlSeconds: number
-}> {
+} {
   const now = Date.now()
   const expirationTime = now + ttl * 1000
 
   // Use the claim-specific method that checks task eligibility
   const { changedRows }
-    = await InternalDatabaseOperations.updateTaskExecutionStateForClaim(
-      ctx,
+    = InternalDatabaseOperations.updateTaskExecutionStateForClaim(
+      db,
       taskId,
       workerId,
       {
@@ -1221,8 +1022,8 @@ async function executeClaimTaskInternal(
 
   if (changedRows === 0) {
     // Get current state to provide better error information
-    const currentState = await InternalDatabaseOperations.getTaskExecutionState(
-      ctx.db,
+    const currentState = InternalDatabaseOperations.getTaskExecutionState(
+      db,
       taskId,
     )
     if (!currentState) {
@@ -1245,22 +1046,22 @@ async function executeClaimTaskInternal(
 /**
  * Internal implementation of reporting task success
  */
-async function executeReportTaskSuccessInternal(
-  ctx: InternalOperationContext,
+function executeReportTaskSuccessInternal(
+  db: Database,
   taskId: TraceId,
   resultVersionId: TraceId,
   workerId: string,
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp: number
   claimWorkerId: string
   claimTtlSeconds: number
-}> {
+} {
   // Verify worker has lease and update to SUCCEEDED, clearing claim info automatically
   const { changedRows }
-    = await InternalDatabaseOperations.updateTaskExecutionStateWithWorkerCheck(
-      ctx,
+    = InternalDatabaseOperations.updateTaskExecutionStateWithWorkerCheck(
+      db,
       taskId,
       workerId,
       {
@@ -1279,27 +1080,27 @@ async function executeReportTaskSuccessInternal(
   }
 
   // Update task's current_version_id to point to result version
-  await InternalDatabaseOperations.updateTaskCurrentVersion(
-    ctx,
+  InternalDatabaseOperations.updateTaskCurrentVersion(
+    db,
     taskId,
     resultVersionId,
   )
 
   // [EVENT BUS] Produce task_completed event within same transaction
   const eventProducer = new SqliteEventProducer()
-  await eventProducer.produce(
+  eventProducer.produce(
     'task_completed',
     {
       task_id: taskId,
       version_id: resultVersionId,
       worker_id: workerId,
     },
-    ctx.db,
+    db,
   )
 
   // Get current state for return value
-  const state = await InternalDatabaseOperations.getTaskExecutionState(
-    ctx.db,
+  const state = InternalDatabaseOperations.getTaskExecutionState(
+    db,
     taskId,
   )
   if (!state) {
@@ -1320,22 +1121,22 @@ async function executeReportTaskSuccessInternal(
 /**
  * Internal implementation of reporting task failure
  */
-async function executeReportTaskFailureInternal(
-  ctx: InternalOperationContext,
+function executeReportTaskFailureInternal(
+  db: Database,
   taskId: TraceId,
   errorVersionId: TraceId,
   workerId: string,
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp: number
   claimWorkerId: string
   claimTtlSeconds: number
-}> {
+} {
   // Verify worker has lease and update to FAILED, clearing claim info automatically
   const { changedRows }
-    = await InternalDatabaseOperations.updateTaskExecutionStateWithWorkerCheck(
-      ctx,
+    = InternalDatabaseOperations.updateTaskExecutionStateWithWorkerCheck(
+      db,
       taskId,
       workerId,
       {
@@ -1354,27 +1155,27 @@ async function executeReportTaskFailureInternal(
   }
 
   // Update task's current_version_id to point to error version
-  await InternalDatabaseOperations.updateTaskCurrentVersion(
-    ctx,
+  InternalDatabaseOperations.updateTaskCurrentVersion(
+    db,
     taskId,
     errorVersionId,
   )
 
   // [EVENT BUS] Produce task_failed event within same transaction
   const eventProducer = new SqliteEventProducer()
-  await eventProducer.produce(
+  eventProducer.produce(
     'task_failed',
     {
       task_id: taskId,
       version_id: errorVersionId,
       worker_id: workerId,
     },
-    ctx.db,
+    db,
   )
 
   // Get current state for return value
-  const state = await InternalDatabaseOperations.getTaskExecutionState(
-    ctx.db,
+  const state = InternalDatabaseOperations.getTaskExecutionState(
+    db,
     taskId,
   )
   if (!state) {
@@ -1395,37 +1196,27 @@ async function executeReportTaskFailureInternal(
 /**
  * Internal implementation of scheduling task for execution
  */
-async function executeScheduleTaskForExecutionInternal(
-  ctx: InternalOperationContext,
+function executeScheduleTaskForExecutionInternal(
+  db: Database,
   taskId: TraceId,
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp?: number
   claimWorkerId?: string
   claimTtlSeconds?: number
-}> {
+} {
   // Get the task to find its action_id
-  const task = await InternalDatabaseOperations.getTask(ctx.db, taskId)
+  const task = InternalDatabaseOperations.getTask(db, taskId)
   if (!task) {
     throw new Error(`Task ${taskId} not found`)
   }
 
   // Create or update execution state to PENDING (use upsert to handle existing records)
-  await new Promise<void>((resolve, reject) => {
-    ctx.db.run(
-      `INSERT OR REPLACE INTO TaskExecutionStates (task_id, action_id, runtime_status, claim_timestamp, claim_worker_id, claim_ttl_seconds, expiration_time)
+  db.prepare(
+    `INSERT OR REPLACE INTO TaskExecutionStates (task_id, action_id, runtime_status, claim_timestamp, claim_worker_id, claim_ttl_seconds, expiration_time)
        VALUES (?, ?, 'PENDING', NULL, NULL, NULL, NULL)`,
-      [taskId, task.action_id],
-      function (err) {
-        if (err)
-          reject(
-            new Error(`Failed to schedule task execution state: ${err.message}`),
-          )
-        else resolve()
-      },
-    )
-  })
+  ).run(taskId, task.action_id)
 
   return {
     taskId,
@@ -1439,8 +1230,8 @@ async function executeScheduleTaskForExecutionInternal(
 /**
  * Internal implementation of updating node states
  */
-async function executeUpdateNodeStatesInternal(
-  ctx: InternalOperationContext,
+function executeUpdateNodeStatesInternal(
+  db: Database,
   revisionId: TraceId,
   nodeUpdates: Array<{
     nodeId: string
@@ -1451,7 +1242,7 @@ async function executeUpdateNodeStatesInternal(
     lastInputsHash?: AssetId
     metaAssetHash?: AssetId
   }>,
-): Promise<{ id: TraceId, status: string, createdAt: number, nodes: any[] }> {
+): { id: TraceId, status: string, createdAt: number, nodes: any[] } {
   // Process each node update
   console.log(
     `🔍 [DB_OPS] executeUpdateNodeStatesInternal: Processing ${nodeUpdates.length} updates for revisionId=${revisionId}`,
@@ -1462,34 +1253,33 @@ async function executeUpdateNodeStatesInternal(
       `🔍 [DB_OPS] Processing update: nodeId=${update.nodeId}, lastInputsHash=${update.lastInputsHash || 'undefined'}`,
     )
 
-    await new Promise<void>((resolve, reject) => {
-      const contextHash = update.contextAssetHash
+    const contextHash = update.contextAssetHash
 
-      // Upsert node state
-      // Note: We use a sentinel value for "not provided" vs "explicitly NULL"
-      // - undefined -> use sentinel '__KEEP__' to preserve existing value
-      // - null -> use NULL to clear the field
-      // - value -> use the value
-      const hasRequiredTaskId = update.requiredTaskId !== undefined
-      const requiredTaskIdValue = hasRequiredTaskId
-        ? update.requiredTaskId
-        : '__KEEP__'
+    // Upsert node state
+    // Note: We use a sentinel value for "not provided" vs "explicitly NULL"
+    // - undefined -> use sentinel '__KEEP__' to preserve existing value
+    // - null -> use NULL to clear the field
+    // - value -> use the value
+    const hasRequiredTaskId = update.requiredTaskId !== undefined
+    const requiredTaskIdValue = hasRequiredTaskId
+      ? update.requiredTaskId
+      : '__KEEP__'
 
-      const hasLastInputsHash = update.lastInputsHash !== undefined
-      const lastInputsHashValue = hasLastInputsHash
-        ? update.lastInputsHash
-        : '__KEEP__'
+    const hasLastInputsHash = update.lastInputsHash !== undefined
+    const lastInputsHashValue = hasLastInputsHash
+      ? update.lastInputsHash
+      : '__KEEP__'
 
-      const hasMetaAssetHash = update.metaAssetHash !== undefined
-      const metaAssetHashValue = hasMetaAssetHash
-        ? update.metaAssetHash
-        : '__KEEP__'
+    const hasMetaAssetHash = update.metaAssetHash !== undefined
+    const metaAssetHashValue = hasMetaAssetHash
+      ? update.metaAssetHash
+      : '__KEEP__'
 
-      console.log(
-        `🔍 [DB_OPS] SQL values: lastInputsHash=${lastInputsHashValue} (from ${update.lastInputsHash})`,
-      )
+    console.log(
+      `🔍 [DB_OPS] SQL values: lastInputsHash=${lastInputsHashValue} (from ${update.lastInputsHash})`,
+    )
 
-      const query = `INSERT INTO WorkflowRevisionNodeStates (
+    const query = `INSERT INTO WorkflowRevisionNodeStates (
            workflow_revision_id, node_id_in_workflow, context_asset_hash,
            dependency_status, runtime_status, required_task_id, last_inputs_hash, meta_asset_hash
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1501,60 +1291,41 @@ async function executeUpdateNodeStatesInternal(
            last_inputs_hash = CASE WHEN excluded.last_inputs_hash = '__KEEP__' THEN last_inputs_hash ELSE excluded.last_inputs_hash END,
            meta_asset_hash = CASE WHEN excluded.meta_asset_hash = '__KEEP__' THEN meta_asset_hash ELSE excluded.meta_asset_hash END`
 
-      const params = [
-        revisionId,
-        update.nodeId,
-        contextHash,
-        update.dependencyStatus || 'STALE',
-        update.runtimeStatus,
-        requiredTaskIdValue,
-        lastInputsHashValue,
-        metaAssetHashValue,
-      ]
+    const params = [
+      revisionId,
+      update.nodeId,
+      contextHash,
+      update.dependencyStatus || 'STALE',
+      update.runtimeStatus,
+      requiredTaskIdValue,
+      lastInputsHashValue,
+      metaAssetHashValue,
+    ]
 
-      console.log(`🔍 [DB_OPS] Executing SQL with params:`, params)
+    console.log(`🔍 [DB_OPS] Executing SQL with params:`, params)
 
-      ctx.db.run(query, params, function (err) {
-        if (err) {
-          console.error(
-            `❌ [DB_OPS] SQL error for node ${update.nodeId}:`,
-            err,
-          )
-          reject(
-            new Error(`Failed to upsert node ${update.nodeId}: ${err.message}`),
-          )
-        }
-        else {
-          console.log(
-            `✅ [DB_OPS] Successfully upserted node ${update.nodeId}`,
-          )
-          resolve()
-        }
-      })
-    })
+    db.prepare(query).run(...params)
+
+    console.log(
+      `✅ [DB_OPS] Successfully upserted node ${update.nodeId}`,
+    )
   }
 
   // Get revision timestamp for response
-  const revisionTimestamp = await new Promise<number>((resolve, reject) => {
-    ctx.db.get<{ timestamp_created: number }>(
-      'SELECT timestamp_created FROM Versions WHERE version_id = ?',
-      [revisionId],
-      (err, row) => {
-        if (err || !row)
-          reject(
-            new Error(
-              'Failed to fetch revision timestamp for updateNodeStates.',
-            ),
-          )
-        else resolve(row.timestamp_created)
-      },
+  const revisionRow = db.prepare(
+    'SELECT timestamp_created FROM Versions WHERE version_id = ?',
+  ).get(revisionId) as { timestamp_created: number } | undefined
+
+  if (!revisionRow) {
+    throw new Error(
+      'Failed to fetch revision timestamp for updateNodeStates.',
     )
-  })
+  }
 
   return {
     id: revisionId,
     status: 'PROCESSING_UPDATES',
-    createdAt: revisionTimestamp,
+    createdAt: revisionRow.timestamp_created,
     nodes: [],
   }
 }
@@ -1562,20 +1333,20 @@ async function executeUpdateNodeStatesInternal(
 /**
  * Internal implementation of refreshing a task
  */
-export async function executeRefreshTaskInternal(
-  ctx: InternalOperationContext,
+export function executeRefreshTaskInternal(
+  db: Database,
   taskId: TraceId,
   options?: { clearVersion?: boolean },
-): Promise<{
+): {
   taskId: TraceId
   runtimeStatus: string
   claimTimestamp: number | null
   claimWorkerId: string | null
   claimTtlSeconds: number | null
-}> {
+} {
   // 1. Check if task exists first
-  const currentState = await InternalDatabaseOperations.getTaskExecutionState(
-    ctx.db,
+  const currentState = InternalDatabaseOperations.getTaskExecutionState(
+    db,
     taskId,
   )
   if (!currentState) {
@@ -1585,8 +1356,8 @@ export async function executeRefreshTaskInternal(
   // 2. Atomically update the task state only if it's in SUCCEEDED or FAILED state
   // This prevents race conditions by checking the status in the WHERE clause
   const { changedRows }
-    = await InternalDatabaseOperations.updateTaskExecutionStateWithStatusCheck(
-      ctx,
+    = InternalDatabaseOperations.updateTaskExecutionStateWithStatusCheck(
+      db,
       taskId,
       ['SUCCEEDED', 'FAILED'], // Only allow refresh from these states
       {
@@ -1600,8 +1371,8 @@ export async function executeRefreshTaskInternal(
 
   if (changedRows === 0) {
     // Get current state to provide better error message
-    const latestState = await InternalDatabaseOperations.getTaskExecutionState(
-      ctx.db,
+    const latestState = InternalDatabaseOperations.getTaskExecutionState(
+      db,
       taskId,
     )
     if (!latestState) {
@@ -1616,19 +1387,9 @@ export async function executeRefreshTaskInternal(
   // Default: false (for backward compatibility - allows "secret" claiming before other workers discover it)
   // Set to true: for rerun operations where task should be publicly discoverable
   if (options?.clearVersion) {
-    await new Promise<void>((resolve, reject) => {
-      ctx.db.run(
-        `UPDATE Tasks SET current_version_id = NULL WHERE task_id = ?`,
-        [taskId],
-        (err) => {
-          if (err)
-            return reject(
-              new Error(`Failed to clear task version: ${err.message}`),
-            )
-          resolve()
-        },
-      )
-    })
+    db.prepare(
+      `UPDATE Tasks SET current_version_id = NULL WHERE task_id = ?`,
+    ).run(taskId)
   }
 
   return {
@@ -1648,46 +1409,36 @@ export async function executeRefreshTaskInternal(
  * Query operations that don't need serialization (reads are concurrent in SQLite)
  */
 export class DatabaseQueries {
-  static async findRunnableTasks(
+  static findRunnableTasks(
     actionId?: string,
     limit: number = 50,
-  ): Promise<
-    Array<{ taskId: TraceId, runtimeStatus: string, actionId: string }>
-  > {
+  ): Array<{ taskId: TraceId, runtimeStatus: string, actionId: string }> {
     const db = getDB()
 
-    return new Promise((resolve, reject) => {
-      let query = `
-        SELECT task_id, runtime_status, action_id 
-        FROM TaskExecutionStates 
+    let query = `
+        SELECT task_id, runtime_status, action_id
+        FROM TaskExecutionStates
         WHERE runtime_status = 'PENDING'
       `
-      const params: any[] = []
+    const params: any[] = []
 
-      if (actionId) {
-        query += ` AND action_id = ?`
-        params.push(actionId)
-      }
+    if (actionId) {
+      query += ` AND action_id = ?`
+      params.push(actionId)
+    }
 
-      query += ` ORDER BY task_id LIMIT ?`
-      params.push(limit)
+    query += ` ORDER BY task_id LIMIT ?`
+    params.push(limit)
 
-      db.all(query, params, (err, rows: any[]) => {
-        if (err)
-          reject(new Error(`Failed to find runnable tasks: ${err.message}`))
-        else
-          resolve(
-            rows.map(row => ({
-              taskId: row.task_id,
-              runtimeStatus: row.runtime_status,
-              actionId: row.action_id,
-            })),
-          )
-      })
-    })
+    const rows = db.prepare(query).all(...params) as any[]
+    return rows.map(row => ({
+      taskId: row.task_id,
+      runtimeStatus: row.runtime_status,
+      actionId: row.action_id,
+    }))
   }
 
-  static async getTaskWithCurrentVersion(taskId: TraceId): Promise<any> {
+  static getTaskWithCurrentVersion(taskId: TraceId): any {
     const db = getDB()
     return InternalDatabaseOperations.getTask(db, taskId)
   }
@@ -1698,47 +1449,33 @@ export class DatabaseQueries {
    *
    * @returns { wiTaskId: TraceId, currentRevisionId: TraceId }
    */
-  static async getWorkflowTaskFromHandle(handleId: TraceId): Promise<{
+  static getWorkflowTaskFromHandle(handleId: TraceId): {
     wiTaskId: TraceId
     currentRevisionId: TraceId
-  }> {
+  } {
     const db = getDB()
 
-    return new Promise((resolve, reject) => {
-      // Step 1: Get WI Task from Handle
-      db.get(
-        `SELECT task_id FROM ExecutionHandles WHERE handle_id = ?`,
-        [handleId],
-        (err, handleRow: any) => {
-          if (err)
-            return reject(new Error(`Failed to fetch handle: ${err.message}`))
-          if (!handleRow)
-            return reject(new Error(`Handle ${handleId} not found`))
+    // Step 1: Get WI Task from Handle
+    const handleRow = db.prepare(
+      `SELECT task_id FROM ExecutionHandles WHERE handle_id = ?`,
+    ).get(handleId) as any
+    if (!handleRow) {
+      throw new Error(`Handle ${handleId} not found`)
+    }
 
-          const wiTaskId = handleRow.task_id
+    const wiTaskId = handleRow.task_id
 
-          // Step 2: Get active REVISION version (O(1) lookup via active_revision_id)
-          db.get(
-            `SELECT active_revision_id FROM Tasks WHERE task_id = ?`,
-            [wiTaskId],
-            (err2, taskRow: any) => {
-              if (err2)
-                return reject(
-                  new Error(`Failed to fetch active revision: ${err2.message}`),
-                )
-              if (!taskRow?.active_revision_id)
-                return reject(
-                  new Error(`WI Task ${wiTaskId} has no active revision`),
-                )
+    // Step 2: Get active REVISION version (O(1) lookup via active_revision_id)
+    const taskRow = db.prepare(
+      `SELECT active_revision_id FROM Tasks WHERE task_id = ?`,
+    ).get(wiTaskId) as any
+    if (!taskRow?.active_revision_id) {
+      throw new Error(`WI Task ${wiTaskId} has no active revision`)
+    }
 
-              resolve({
-                wiTaskId,
-                currentRevisionId: taskRow.active_revision_id,
-              })
-            },
-          )
-        },
-      )
-    })
+    return {
+      wiTaskId,
+      currentRevisionId: taskRow.active_revision_id,
+    }
   }
 }

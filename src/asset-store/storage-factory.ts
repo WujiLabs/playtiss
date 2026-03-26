@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import { type AssetId, isAssetId } from '../index.js'
-import { getConfig, type BridgeConfig, type S3Config, type StorageConfig } from './config.js'
 import { BridgeStorageProvider } from './bridge/provider.js'
+import { type BridgeConfig, getConfig, type S3Config, type StorageConfig } from './config.js'
 import { LocalStorageProvider } from './local/index.js'
 import { S3StorageProvider } from './s3/index.js'
 import {

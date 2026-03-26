@@ -1,17 +1,15 @@
 // Copyright (c) 2026 Wuji Labs Inc
 /**
- * Enforcement test: all SQLite transactions MUST go through mutation-serializer.ts.
+ * Enforcement test: no raw transaction SQL in the codebase.
  *
- * Raw `BEGIN TRANSACTION` / `BEGIN IMMEDIATE` outside the serializer causes
- * "cannot start a transaction within a transaction" errors when concurrent
- * mutations overlap on the shared SQLite connection.
- *
- * Use `withTransaction()` or `serializeMutation()` + `runInTransaction()`.
+ * With better-sqlite3, all transactions are handled by db.transaction() via
+ * the withTransaction() helper in mutation-serializer.ts. No code should
+ * contain raw BEGIN/COMMIT/ROLLBACK SQL strings.
  */
 
-import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import { describe, expect, it } from 'vitest'
 
 function getAllTsFiles(dir: string): string[] {
   const results: string[] = []
@@ -28,16 +26,12 @@ function getAllTsFiles(dir: string): string[] {
 }
 
 describe('Transaction safety enforcement', () => {
-  it('no BEGIN TRANSACTION/IMMEDIATE outside mutation-serializer.ts', () => {
+  it('no raw BEGIN/COMMIT/ROLLBACK SQL in source files', () => {
     const srcDir = path.resolve(__dirname, '..')
-    const allowedFile = path.resolve(__dirname, 'mutation-serializer.ts')
-
     const tsFiles = getAllTsFiles(srcDir)
     const violations: string[] = []
 
     for (const file of tsFiles) {
-      if (path.resolve(file) === allowedFile) continue
-
       const content = fs.readFileSync(file, 'utf-8')
       const lines = content.split('\n')
 
@@ -45,7 +39,7 @@ describe('Transaction safety enforcement', () => {
         const line = lines[i]
         // Skip comments
         if (line.trimStart().startsWith('//') || line.trimStart().startsWith('*')) continue
-        if (/BEGIN\s+(TRANSACTION|IMMEDIATE)/i.test(line)) {
+        if (/BEGIN\s+(TRANSACTION|IMMEDIATE)/i.test(line) || /\bCOMMIT\b/.test(line) || /\bROLLBACK\b/.test(line)) {
           const rel = path.relative(srcDir, file)
           violations.push(`${rel}:${i + 1}: ${line.trim()}`)
         }

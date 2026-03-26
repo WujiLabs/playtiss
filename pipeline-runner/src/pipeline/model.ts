@@ -16,16 +16,14 @@ import {
   type TraceId,
 } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
-import { type Node, type Pipeline } from 'playtiss/pipeline'
 import { encodeToString } from 'playtiss/types/json'
 
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
-import { getLimiter } from '../utils/concurrency-limiter.js'
-
 // ================================================================
 // V12 TYPES
 // ================================================================
 import type { Task } from '../graphql/types.js'
+import { getLimiter } from '../utils/concurrency-limiter.js'
 
 /**
  * V12 Context - no longer includes "%id" since workflow task info is passed separately
@@ -209,7 +207,7 @@ export async function getWorkflowTaskIdFromRevisionId(
 export async function createTaskRecord(
   _pipeline: AssetId,
   context: V12Context,
-  node: AssetId,
+  node: TraceId,
   task: Task,
   workflowContext: V12WorkflowExecutionContext,
   lastInputsHash: AssetId,
@@ -272,7 +270,7 @@ export async function createTaskRecord(
 export async function getTaskInputs(
   pipeline: AssetId,
   context: V12Context,
-  node: AssetId | null, // null indicates pipeline output
+  node: TraceId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
 ): Promise<DictAsset | null> {
   if (!node) {
@@ -349,7 +347,7 @@ export async function getTaskRecords(
       return {
         workflowRevisionId: nodeState.workflowRevisionId as TraceId,
         context: nodeState.contextAssetHash as AssetId,
-        node: nodeState.nodeIdInWorkflow as AssetId,
+        node: nodeState.nodeIdInWorkflow as TraceId,
         task: task,
       }
     })
@@ -375,7 +373,7 @@ export async function getTaskRecords(
 export async function createPartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
-  node: AssetId | null, // null indicates pipeline output
+  node: TraceId | null, // null indicates pipeline output
   asset: DictAsset,
   workflowContext: V12WorkflowExecutionContext,
 ): Promise<void> {
@@ -409,7 +407,7 @@ export async function createPartialTaskInputs(
 export async function getPartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
-  node: AssetId | null, // null indicates pipeline output
+  node: TraceId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
 ): Promise<DictAsset | null> {
   if (!node) {
@@ -440,7 +438,7 @@ export async function getPartialTaskInputs(
 export async function deletePartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
-  node: AssetId | null, // null indicates pipeline output
+  node: TraceId | null, // null indicates pipeline output
   workflowContext: V12WorkflowExecutionContext,
 ) {
   if (!node) {
@@ -469,7 +467,7 @@ export async function deletePartialTaskInputs(
 export async function updatePartialTaskInputs(
   pipeline: AssetId,
   context: V12Context,
-  node: AssetId | null, // null indicates pipeline output
+  node: TraceId | null, // null indicates pipeline output
   key: string,
   item: AssetValue,
   workflowContext: V12WorkflowExecutionContext,
@@ -512,7 +510,7 @@ export async function updatePartialTaskInputs(
 type TaskTableRecord = {
   workflowRevisionId: TraceId
   context: AssetId
-  node: AssetId
+  node: TraceId
   task: Task
 }
 
@@ -530,7 +528,7 @@ export async function debugGetWorkflowState(
 ): Promise<{
   workflowRevisionId: TraceId
   contextAssetHash: AssetId
-  pendingMergeNodes: Array<{ nodeId: AssetId, accumulator: DictAsset }>
+  pendingMergeNodes: Array<{ nodeId: TraceId, accumulator: DictAsset }>
 }> {
   const contextAssetHash = await getContextAssetHash(context)
 

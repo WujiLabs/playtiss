@@ -3,7 +3,9 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
+  S3ServiceException,
 } from '@aws-sdk/client-s3'
+
 import { type AssetId } from '../../index.js'
 import { type UserActionId, type VersionId } from '../../types/playtiss.js'
 import {
@@ -52,13 +54,13 @@ export async function saveAssetWithMetadata(
       `Asset ${id} saved to S3 with metadata: ${params.Bucket}/${params.Key} (${buffer.length} bytes)`,
     )
   }
-  catch (error: any) {
+  catch (error) {
     console.error('S3 saveAssetWithMetadata failed:', {
       assetId: id,
       bucket: params.Bucket,
       key: params.Key,
       bufferSize: buffer.length,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     })
     throw error
   }
@@ -82,9 +84,15 @@ export async function getAssetMetadata(id: AssetId): Promise<{
       timestamp_created: response.LastModified || new Date(),
     }
   }
-  catch (error: any) {
-    if (error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404) {
-      return null
+  catch (error) {
+    if (S3ServiceException.isInstance(error)) {
+      if (error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404) {
+        return null
+      }
+      if (error.name === 'AccessDenied' || error.$metadata?.httpStatusCode === 403) {
+        console.debug(`S3 403 for ${id} — treating as not found (missing ListBucket permission)`)
+        return null
+      }
     }
     throw error
   }
@@ -129,11 +137,11 @@ export async function saveAssetReferences(
       `Asset references saved: ${parentAssetId} -> ${childAssetIds.length} children`,
     )
   }
-  catch (error: any) {
+  catch (error) {
     console.error('S3 saveAssetReferences failed:', {
       parentAssetId,
       childCount: childAssetIds.length,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     })
     throw error
   }
@@ -165,9 +173,11 @@ export async function getAssetReferences(
 
     return childAssetIds
   }
-  catch (error: any) {
-    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
-      return []
+  catch (error) {
+    if (S3ServiceException.isInstance(error)) {
+      if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+        return []
+      }
     }
     throw error
   }
@@ -212,11 +222,11 @@ export async function saveAssetToActionReferences(
       `Asset-to-action references saved: ${parentAssetId} -> ${userActionIds.length} user actions`,
     )
   }
-  catch (error: any) {
+  catch (error) {
     console.error('S3 saveAssetToActionReferences failed:', {
       parentAssetId,
       actionCount: userActionIds.length,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     })
     throw error
   }
@@ -261,11 +271,11 @@ export async function saveAssetToVersionReferences(
       `Asset-to-version references saved: ${parentAssetId} -> ${versionIds.length} versions`,
     )
   }
-  catch (error: any) {
+  catch (error) {
     console.error('S3 saveAssetToVersionReferences failed:', {
       parentAssetId,
       versionCount: versionIds.length,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     })
     throw error
   }

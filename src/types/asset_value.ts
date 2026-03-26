@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { CID } from 'multiformats/cid'
-import type { Link, SHA_256 } from 'multiformats/link/interface'
 import * as dagJSON from '@ipld/dag-json'
+import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
+import type { Link, SHA_256 } from 'multiformats/link/interface'
 
 export { CID }
 
@@ -16,15 +16,15 @@ type RawCode = typeof raw.code // 85
 // When dag-json encodes this:
 //   Uint8Array → {"/": {"bytes": "base64pad..."}}
 //   CID        → {"/": "cidString"}
-export type AssetValue =
-  | { [key: string]: AssetValue }
-  | AssetValue[]
-  | string
-  | number
-  | boolean
-  | null
-  | Uint8Array
-  | CID
+export type AssetValue
+  = | { [key: string]: AssetValue }
+    | AssetValue[]
+    | string
+    | number
+    | boolean
+    | null
+    | Uint8Array
+    | CID
 
 // Replaces DictLazyAsset — a plain object whose values are AssetValues.
 export type DictAsset = { [key: string]: AssetValue }

@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest'
-import * as Block from 'multiformats/block'
 import * as dagCBOR from '@ipld/dag-cbor'
 import * as dagJSON from '@ipld/dag-json'
+import * as Block from 'multiformats/block'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
 import { sha512 } from 'multiformats/hashes/sha2'
+import { describe, expect, it } from 'vitest'
+
 import { isAssetId } from '../types/asset_id.js'
 import { isLink } from '../types/asset_value.js'
 

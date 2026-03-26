@@ -8,8 +8,9 @@
  * Based on the Python playtiss-action-runner gql_client.py implementation.
  * Uses generated types from GraphQL codegen.
  */
-import { ApolloClient, InMemoryCache, createHttpLink } from '@apollo/client/index.js'
+import { ApolloClient, createHttpLink, InMemoryCache } from '@apollo/client/index.js'
 import type { ActionId, AssetId, TraceId } from 'playtiss'
+
 import type { VersionType } from './__generated__/graphql.js'
 import { graphql } from './__generated__/index.js'
 

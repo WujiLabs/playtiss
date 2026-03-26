@@ -4,7 +4,7 @@ import nodePath from 'node:path'
 
 export const paths = {
   ignores: ['dist/**', "test/**",'eslint.config.mjs', "**/*.js", 'src/__generated__/*.ts', 'codegen.ts'],
-  files: ["src/**/*.ts"],
+  files: ["src/**/*.ts", "dev-tools/**/*.ts"],
 }
 
 export const config = ({ path = ".", baseConfig, ignores: baseIgnores = [], files: baseFiles = [] }) => {

@@ -252,10 +252,6 @@ type WorkflowRevisionNodeStateEdge {
   node: WorkflowRevisionNodeState!
 }
 
-type Profile {
-  name: String!
-}
-
 # --- Interceptor Session (Phase 2 Chat IS Workflow) ---
 """
 Represents an interceptor chat session that tracks workflow building state.
@@ -297,9 +293,6 @@ input InterceptorSessionInput {
 # QUERIES
 # ------------------------------------------------------------------
 type Query {
-  # --- 通用API ---
-  getProfile: Profile! 
-
   # --- APIs for Clients (CLI / Web UI) ---
   # --- (新) 面向客户端的、基于句柄的查询API ---
   # 获取某次特定修订版的详细状态，用于 `playtiss status <handle_id>` 和 Web UI
@@ -336,7 +329,7 @@ type Query {
   # 获取工作流节点状态 (用于getTaskForNode查询)
   getWorkflowRevisionNodeState(
     workflowRevisionId: TraceId!
-    nodeIdInWorkflow: AssetId!
+    nodeIdInWorkflow: String!
     contextAssetHash: AssetId!
   ): WorkflowRevisionNodeState
 

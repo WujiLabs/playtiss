@@ -15,16 +15,16 @@
 
 import {
   type AssetId,
-  type DictAsset,
   type TraceId,
 } from 'playtiss'
 import { type Pipeline } from 'playtiss/pipeline'
+
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
 import type { Task } from '../graphql/types.js'
 import {
-  handleWorkflowStart,
-  handleTaskFailure,
   handleTaskCompletion,
+  handleTaskFailure,
+  handleWorkflowStart,
 } from '../pipeline/scheduler.js'
 import { loadCached } from '../utils/asset-cache.js'
 
@@ -340,7 +340,6 @@ function isPipeline(pipeline: unknown): pipeline is Pipeline {
     (pipeline as Pipeline).nodes != null && (pipeline as Pipeline).edges != null
   )
 }
-
 
 /**
  * Update WorkflowRevisionNodeStates for a completed/failed task

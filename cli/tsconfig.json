@@ -6,7 +6,7 @@
     "moduleResolution": "NodeNext",
     "declaration": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -16,6 +16,6 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "dev-tools/**/*"],
   "exclude": ["node_modules", "dist"]
 }

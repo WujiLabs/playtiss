@@ -2,12 +2,12 @@
 import * as dagJSON from '@ipld/dag-json'
 import {
   GraphQLError,
+  type GraphQLScalarLiteralParser,
   GraphQLScalarType,
   Kind,
   print,
-  type GraphQLScalarLiteralParser,
 } from 'graphql'
-import type { ObjectValueNode, ValueNode } from 'graphql/language'
+import type { ValueNode } from 'graphql/language'
 import type { AssetValue, DictAsset } from 'playtiss'
 
 type VariablesType = Parameters<GraphQLScalarLiteralParser<unknown>>[1]
@@ -93,7 +93,7 @@ export const DictJSONAssetScalar = new GraphQLScalarType<DictAsset, unknown>({
       )
     }
     const obj: Record<string, AssetValue> = {}
-    ;(ast as ObjectValueNode).fields.forEach((field) => {
+    ast.fields.forEach((field) => {
       obj[field.name.value] = parseLiteral('DictJSONAsset', field.value, variables)
     })
     return parseJsonValue(obj) as DictAsset

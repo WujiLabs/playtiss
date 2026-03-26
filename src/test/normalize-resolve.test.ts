@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import * as dagJSON from '@ipld/dag-json'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
-import * as dagJSON from '@ipld/dag-json'
-import { describe, it, expect, beforeEach } from 'vitest'
-import type { AssetValue, AssetId } from '../index.js'
-import type { StorageProvider } from '../asset-store/storage-provider.js'
+import { beforeEach, describe, expect, it } from 'vitest'
+
 import { computeHash } from '../asset-store/compute_hash.js'
 import { setCustomStorageProvider } from '../asset-store/index.js'
-import { store, load, resolve } from '../asset-store/index.js'
+import { load, resolve, store } from '../asset-store/index.js'
+import type { StorageProvider } from '../asset-store/storage-provider.js'
+import type { AssetId, AssetValue } from '../index.js'
 
 // ---- In-memory storage provider for tests ----
 function makeMemoryStore(): { data: Map<string, Uint8Array>, provider: StorageProvider } {
@@ -92,8 +93,14 @@ describe('computeHash — Merkle-ization (pure)', () => {
   it('computeHash is pure — does not call storage', async () => {
     let storageCalled = false
     const spy: StorageProvider = {
-      async hasBuffer() { storageCalled = true; return false },
-      async fetchBuffer() { storageCalled = true; return new Uint8Array() },
+      async hasBuffer() {
+        storageCalled = true
+        return false
+      },
+      async fetchBuffer() {
+        storageCalled = true
+        return new Uint8Array()
+      },
       async saveBuffer() { storageCalled = true },
     }
     setCustomStorageProvider(spy)
@@ -175,7 +182,7 @@ describe('store — Merkle deduplication', () => {
     setCustomStorageProvider(provider)
     // store() persists exactly one block; its bytes encode a flat structure
     await store({ a: { b: 1 }, c: [2, 3] })
-    expect(data.size).toBe(1)  // single block
+    expect(data.size).toBe(1) // single block
     const [bytes] = [...data.values()]
     const decoded = dagJSON.decode(bytes) as Record<string, unknown>
     // Each value in the stored block is a CID (sub-objects/arrays are CID-linked)

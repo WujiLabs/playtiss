@@ -7,7 +7,7 @@
  * with different storage backends (SQLite, Kafka, etc.)
  */
 
-import type { Database as SQLiteDatabase } from 'sqlite3'
+import type { Database } from 'better-sqlite3'
 
 /**
  * Standard event structure
@@ -44,7 +44,7 @@ export interface IEventProducer {
    * @param db Database instance (for SQLite backend)
    * @returns The created event
    */
-  produce(topic: string, payload: object, db: SQLiteDatabase): Promise<Event>
+  produce(topic: string, payload: object, db: Database): Event
 }
 
 /**

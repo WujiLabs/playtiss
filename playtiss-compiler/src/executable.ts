@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId, type AssetValue, type DictAsset } from 'playtiss'
-import { store as defaultStore } from 'playtiss/asset-store'
-import { isConstNode, type ConstNode, type Edge, type Node, type Pipeline } from 'playtiss/pipeline'
+import { type AssetValue } from 'playtiss'
+import { type ConstNode, type Edge, isConstNode, type Node, type Pipeline } from 'playtiss/pipeline'
+import { generateTraceId, type TraceId } from 'playtiss/types/trace_id'
+
 import { parse } from './parser.js'
 import type {
   BuiltinAction,
@@ -13,32 +14,22 @@ import type {
 } from './types.js'
 
 /**
- * Store function type for asset storage
- * Accepts any asset and returns a CompoundAssetId
- */
-export type StoreFunction = (asset: DictAsset) => Promise<AssetId>
-
-/**
  * Convert PFMWorkflow (intermediate) to Pipeline (executable)
  *
  * This strips metadata like chainOfThought, section numbers, and node names,
  * producing a content-addressable DAG ready for execution.
  *
  * @param pfm - PFMWorkflow (intermediate representation)
- * @param options - Optional configuration
- * @param options.store - Custom store function (defaults to playtiss/asset-store)
  * @returns Pipeline (executable representation)
  */
 export async function toExecutable(
   pfm: PFMWorkflow,
-  options?: { store?: StoreFunction },
 ): Promise<Pipeline> {
-  const store = options?.store ?? defaultStore
   const nodes: Record<string, Node> = {}
   const edges: Record<string, Edge> = {}
 
-  // Map section → AssetId
-  const sectionToId = new Map<SectionNumber, AssetId>()
+  // Map section → TraceId
+  const sectionToId = new Map<SectionNumber, TraceId>()
 
   // Create nodes using proper action types (Pattern 4)
   for (const pfmNode of pfm.nodes) {
@@ -75,25 +66,17 @@ export async function toExecutable(
       }
 
       node = {
-        asset_type: 'pipeline_node',
         action: 'const',
-        use_task_creator: false,
         value: valueParam as AssetValue,
-
-        timestamp: Date.now(),
       } satisfies ConstNode
     }
     else {
       node = {
-        asset_type: 'pipeline_node',
         action,
-        use_task_creator: !pfmNode.builtinAction,
-
-        timestamp: Date.now(),
       }
     }
 
-    const nodeId = await store(node)
+    const nodeId = generateTraceId()
     sectionToId.set(pfmNode.section, nodeId)
     nodes[nodeId] = node
   }
@@ -114,7 +97,6 @@ export async function toExecutable(
       }
 
       const edge: Edge = {
-        asset_type: 'pipeline_edge',
         source: {
           node: sourceId,
           name: dep.outputKey,
@@ -123,11 +105,9 @@ export async function toExecutable(
           node: targetId,
           name: dep.outputKey, // Use outputKey as parameter name
         },
-
-        timestamp: Date.now(),
       }
 
-      const edgeId = await store(edge)
+      const edgeId = generateTraceId()
       edges[edgeId] = edge
     }
   }
@@ -138,13 +118,9 @@ export async function toExecutable(
     nodes,
     edges,
 
-    // Action fields (Pipeline extends Action)
-    asset_type: 'action',
     description: pfm.metadata?.description || 'Compiled Workflow',
-    input_shape: {}, // TODO: Infer from workflow inputs
-    output_shape: {}, // TODO: Infer from workflow outputs
-
-    timestamp: Date.now(),
+    input_schema: {}, // TODO: Infer from workflow inputs
+    output_schema: {}, // TODO: Infer from workflow outputs
   }
 
   return pipeline
@@ -164,9 +140,8 @@ export async function toExecutable(
 export function tryStringify(pipeline: Pipeline): string {
   const lines: string[] = []
 
-  // Build node list (keys are AssetId - hash without @ prefix)
-  // Object.keys returns string[], but we know they're AssetId (SHA256)
-  const nodeIds = Object.keys(pipeline.nodes) as AssetId[]
+  // Build node list (keys are TraceId UUIDs)
+  const nodeIds = Object.keys(pipeline.nodes) as TraceId[]
   const nodeToSection = new Map<string, string>()
 
   // Assign section numbers (simple sequential numbering with ? markers)
@@ -247,17 +222,14 @@ export function tryStringify(pipeline: Pipeline): string {
  *
  * @param markdown - PFM markdown string
  * @param prev - Optional previous workflow state (for UserActionId persistence)
- * @param options - Optional configuration
- * @param options.store - Custom store function (defaults to playtiss/asset-store)
  * @returns Pipeline (executable representation)
  */
 export async function compile(
   markdown: string,
   prev?: PFMWorkflow,
-  options?: { store?: StoreFunction },
 ): Promise<Pipeline> {
   const pfm = await parse(markdown, prev)
-  return toExecutable(pfm, options)
+  return toExecutable(pfm)
 }
 
 /**

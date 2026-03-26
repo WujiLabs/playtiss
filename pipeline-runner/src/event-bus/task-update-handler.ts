@@ -25,9 +25,10 @@
 import type { AssetId, TraceId } from 'playtiss'
 import type { Pipeline } from 'playtiss/pipeline'
 import type { UserActionId } from 'playtiss/types/playtiss'
+
 import type { PipelineGraphQLClient } from '../graphql/pipeline.js'
 import type { Task, workflowRevisionNodeState } from '../graphql/types.js'
-import { handleTaskFailure, handleTaskCompletion } from '../pipeline/scheduler.js'
+import { handleTaskCompletion, handleTaskFailure } from '../pipeline/scheduler.js'
 import { loadCached } from '../utils/asset-cache.js'
 import type { Event } from './interfaces.js'
 
@@ -574,7 +575,7 @@ async function processStaleNode(
 
     // Step 3: Load workflow definition to get node action
     const pipelineDefinition = await loadCached(pipelineRef) as unknown as Pipeline
-    const nodeDefinition = pipelineDefinition.nodes[nodeId as AssetId]
+    const nodeDefinition = pipelineDefinition.nodes[nodeId as TraceId]
     if (!nodeDefinition) {
       console.error(`❌ Node ${nodeId} not found in workflow definition`)
       return

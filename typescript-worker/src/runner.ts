@@ -5,11 +5,12 @@
  * Handles task claiming, execution, and result reporting using p-limit
  * for concurrency control and a Set for deduplication tracking.
  */
+import pLimit from 'p-limit'
 import type { ActionId, AssetId, DictAsset, TraceId } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
-import pLimit from 'p-limit'
+
 import { GraphQLClient } from './graphql-client.js'
-import { TaskIterator, type TaskInfo } from './task-iterator.js'
+import { type TaskInfo, TaskIterator } from './task-iterator.js'
 
 // Type for tracking lease-expired tasks
 type LeaseExpiredTask = {
@@ -103,7 +104,6 @@ export async function executeTask(
     testRun?: boolean
     timeoutInterval?: number
     workerId?: string
-    leaseExpiredTasks?: Map<string, LeaseExpiredTask>
     isRetry?: boolean
   },
 ): Promise<void> {
@@ -112,7 +112,6 @@ export async function executeTask(
     testRun = false,
     timeoutInterval,
     workerId = 'anonymous',
-    leaseExpiredTasks,
     isRetry = false,
   } = options
 
@@ -298,7 +297,7 @@ export async function runWorkerLoop(
             activeTasks.add(expiredTaskId)
             taskLimit(() =>
               executeTask(client, expiredData.info, execute, {
-                testRun, timeoutInterval, taskIterator, workerId, leaseExpiredTasks, isRetry: true,
+                testRun, timeoutInterval, taskIterator, workerId, isRetry: true,
               }).finally(() => activeTasks.delete(expiredTaskId)),
             )
           }
@@ -315,7 +314,7 @@ export async function runWorkerLoop(
       activeTasks.add(taskId)
       taskLimit(() =>
         executeTask(client, taskInfo, execute, {
-          testRun, timeoutInterval, taskIterator, workerId, leaseExpiredTasks,
+          testRun, timeoutInterval, taskIterator, workerId,
         }).finally(() => activeTasks.delete(taskId)),
       )
     }
@@ -490,4 +489,3 @@ export async function executeSingleTask(
     }
   }
 }
-

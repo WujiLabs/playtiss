@@ -7,14 +7,13 @@ let dbImpl: any = null
 
 async function loadSqliteDependencies() {
   try {
-    // Just verify SQLite dependencies can be loaded - no need to cache them
-    await import('sqlite')
-    await import('sqlite3')
+    // Just verify better-sqlite3 can be loaded - no need to cache it
+    await import('better-sqlite3')
   }
   catch (error: any) {
     throw new Error(
-      `SQLite dependencies not available: ${error.message}. `
-      + `Install with: npm install sqlite sqlite3`,
+      `SQLite dependency not available: ${error.message}. `
+      + `Install with: npm install better-sqlite3`,
     )
   }
 }
@@ -34,13 +33,13 @@ async function getDbImpl() {
       // Try ESM dynamic import first (works in modern environments)
       dbImpl = await import('./asset-db-impl.js')
     }
-    catch (importError: any) {
+    catch (importError) {
       // Fallback to require for CJS environments (Node.js, esbuild CJS target)
       if (typeof require !== 'undefined') {
         try {
           dbImpl = require('./asset-db-impl.js')
         }
-        catch (requireError: any) {
+        catch {
           // Final fallback for test environments - try dist folder
           const path = require('path')
           const distPath = path.resolve(
@@ -56,9 +55,11 @@ async function getDbImpl() {
     }
     return dbImpl
   }
-  catch (error: any) {
+  catch (error) {
     throw new Error(
-      `Failed to load SQLite database implementation: ${error.message}. This is required for local storage.`,
+      `Failed to load SQLite database implementation: ${
+        error instanceof Error ? error.message : String(error)
+      }. This is required for local storage.`,
     )
   }
 }

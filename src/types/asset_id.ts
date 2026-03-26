@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { CID } from 'multiformats/cid'
 import * as dagJSON from '@ipld/dag-json'
+import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
 

@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Wuji Labs Inc
 /**
- * Pipeline Runner GraphQL Client - v12 Handle-Based API Migration
+ * Pipeline Runner GraphQL Client
  *
- * Replaces legacy event-based API with v12 Handle-Based architecture:
- * - requestExecution instead of createTask
- * - Handle-Based monitoring instead of event subscriptions
- * - TaskExecutionStates for execution tracking
- * - WorkflowRevisionNodeStates for workflow orchestration
+ * Provides typed GraphQL operations for workflow orchestration:
+ * - Task creation, claiming, and result reporting
+ * - Workflow node state management (WorkflowRevisionNodeStates)
+ * - Task discovery for workers (findRunnableTasks)
+ * - Merge accumulator operations for split/merge nodes
  */
 
-import { ApolloClient, InMemoryCache, from } from '@apollo/client/index.js'
+import { ApolloClient, from, InMemoryCache } from '@apollo/client/index.js'
 import { BatchHttpLink } from '@apollo/client/link/batch-http/index.js'
 import { setContext } from '@apollo/client/link/context/index.js'
 import { onError } from '@apollo/client/link/error/index.js'
@@ -25,13 +25,13 @@ import {
   type TraceId,
 } from 'playtiss'
 import { computeHash, store } from 'playtiss/asset-store'
-import { encodeToString, decodeFromString } from 'playtiss/types/json'
+
 import { graphql } from '../__generated__/index.js'
 import { getLimiter } from '../utils/concurrency-limiter.js'
 import type { Task } from './types.js'
 
 // ================================================================
-// V12 GRAPHQL OPERATIONS
+// GRAPHQL OPERATIONS
 // ================================================================
 
 // Get task details
@@ -139,7 +139,7 @@ const SCHEDULE_TASK_FOR_EXECUTION = graphql(/* GraphQL */ `
 //   }
 // `;
 
-// Claim task for execution (replaces writeEvent claim)
+// Claim task for execution
 const CLAIM_TASK = graphql(/* GraphQL */ `
   mutation ClaimTask($taskId: TraceId!, $workerId: String!, $ttl: Int!) {
     claimTask(taskId: $taskId, workerId: $workerId, ttl: $ttl) {
@@ -182,7 +182,7 @@ const CLAIM_WORKFLOW_TASK = graphql(/* GraphQL */ `
   }
 `)
 
-// Report task success (replaces writeEvent deliver)
+// Report task success
 const REPORT_TASK_SUCCESS = graphql(/* GraphQL */ `
   mutation ReportTaskSuccess(
     $taskId: TraceId!
@@ -203,7 +203,7 @@ const REPORT_TASK_SUCCESS = graphql(/* GraphQL */ `
   }
 `)
 
-// Report task failure (replaces writeEvent abort)
+// Report task failure
 const REPORT_TASK_FAILURE = graphql(/* GraphQL */ `
   mutation ReportTaskFailure(
     $taskId: TraceId!
@@ -242,19 +242,6 @@ const CREATE_VERSION = graphql(/* GraphQL */ `
       type
       asset_content_hash
       timestamp_created
-    }
-  }
-`)
-
-// Task execution status subscription (replaces getTaskStatus polling)
-const TASK_EXECUTION_UPDATED = graphql(/* GraphQL */ `
-  subscription TaskExecutionUpdated($taskId: TraceId!) {
-    taskExecutionUpdated(taskId: $taskId) {
-      taskId
-      runtimeStatus
-      claim_timestamp
-      claim_worker_id
-      claim_ttl_seconds
     }
   }
 `)
@@ -313,7 +300,7 @@ const FIND_RUNNABLE_TASKS = graphql(/* GraphQL */ `
 const GET_WORKFLOW_REVISION_NODE_STATE = graphql(/* GraphQL */ `
   query GetWorkflowRevisionNodeState(
     $workflowRevisionId: TraceId!
-    $nodeIdInWorkflow: AssetId!
+    $nodeIdInWorkflow: String!
     $contextAssetHash: AssetId!
   ) {
     getWorkflowRevisionNodeState(
@@ -547,7 +534,7 @@ const GET_MERGE_ACCUMULATOR = graphql(/* GraphQL */ `
 `)
 
 // ================================================================
-// V12 CLIENT IMPLEMENTATION
+// CLIENT IMPLEMENTATION
 // ================================================================
 
 export class PipelineGraphQLClient {
@@ -706,7 +693,7 @@ export class PipelineGraphQLClient {
   }
 
   // ================================================================
-  // V12 TASK EXECUTION API (replaces createTask + writeEvent)
+  // TASK EXECUTION API
   // ================================================================
 
   /**
@@ -736,8 +723,7 @@ export class PipelineGraphQLClient {
   }
 
   /**
-   * Create computational task and schedule for execution
-   * Replaces: createTask()
+   * Create computational task and schedule for execution.
    * Returns unchangeable taskId (not Handle ID)
    *
    * IMPORTANT: This method only returns the task ID, not the task content!
@@ -828,7 +814,6 @@ export class PipelineGraphQLClient {
 
   /**
    * Claim task for execution
-   * Replaces: writeEvent(taskId, "claim")
    */
   async claimTask(
     taskId: TraceId,
@@ -1035,7 +1020,6 @@ export class PipelineGraphQLClient {
 
   /**
    * Report task success with output (convenience method)
-   * Replaces: writeEvent(taskId, "deliver", output)
    */
   async reportTaskSuccessWithOutput(
     taskId: TraceId,
@@ -1099,7 +1083,6 @@ export class PipelineGraphQLClient {
 
   /**
    * Report task failure with error (convenience method)
-   * Replaces: writeEvent(taskId, "abort", error)
    */
   async reportTaskFailureWithError(
     taskId: TraceId,
@@ -1135,43 +1118,11 @@ export class PipelineGraphQLClient {
   }
 
   // ================================================================
-  // V12 MONITORING API (replaces getTaskStatus + subscriptions)
+  // TASK & VERSION QUERIES
   // ================================================================
 
   /**
-   * Subscribe to task execution updates
-   * Replaces: getTaskStatus() polling with real-time subscription
-   */
-  subscribeToTaskExecution(
-    taskId: TraceId,
-    callback: (execution: any) => void,
-  ): () => void {
-    const subscription = this.client
-      .subscribe({
-        query: TASK_EXECUTION_UPDATED,
-        variables: { taskId },
-      })
-      .subscribe({
-        next: (result) => {
-          if (result.data?.taskExecutionUpdated) {
-            callback(result.data.taskExecutionUpdated)
-          }
-        },
-        error: (error) => {
-          console.error(
-            `Task execution subscription error for ${taskId}:`,
-            error,
-          )
-        },
-      })
-
-    // Return unsubscribe function
-    return () => subscription.unsubscribe()
-  }
-
-  /**
-   * Get task details by task ID (polling alternative)
-   * Replaces: getTaskStatus() when subscription is not available
+   * Get task details by task ID
    */
   async getTask(taskId: TraceId): Promise<Task | null> {
     try {
@@ -1243,26 +1194,12 @@ export class PipelineGraphQLClient {
     }
   }
 
-  /**
-   * Create Apollo watchQuery for task monitoring (compatibility with existing code)
-   * Replaces: apolloClient.watchQuery({ query: QUERY_TASK_STATUS })
-   */
-  watchTask(taskId: TraceId, pollInterval: number = 10000) {
-    return this.client.watchQuery({
-      query: GET_TASK,
-      variables: { taskId },
-      pollInterval,
-      fetchPolicy: 'network-only',
-    })
-  }
-
   // ================================================================
-  // V12 WORKFLOW STATE API (replaces DynamoDB task mapping)
+  // WORKFLOW STATE API
   // ================================================================
 
   /**
-   * Update node states in workflow
-   * Replaces: DynamoDB createTaskRecord() functionality
+   * Update node states in workflow.
    *
    * Uses LRU cache to deduplicate identical calls since updateNodeStates is idempotent
    * (INSERT ON CONFLICT DO UPDATE with COALESCE preserves existing values)
@@ -1402,12 +1339,11 @@ export class PipelineGraphQLClient {
   }
 
   // ================================================================
-  // V12 TASK DISCOVERY API (replaces legacy getTasksByAction)
+  // TASK DISCOVERY API
   // ================================================================
 
   /**
    * Find runnable tasks for a specific action
-   * Replaces: getTasksByAction() with backward pagination
    */
   async findRunnableTasks(
     options: {
@@ -1450,7 +1386,7 @@ export class PipelineGraphQLClient {
    */
   async getWorkflowRevisionNodeState(
     workflowRevisionId: TraceId,
-    nodeIdInWorkflow: AssetId,
+    nodeIdInWorkflow: string,
     contextAssetHash: AssetId,
   ) {
     try {
@@ -1470,7 +1406,7 @@ export class PipelineGraphQLClient {
 
   /**
    * Get node state by exact lookup (used by pipeline-runner for stale detection)
-   * Similar to getWorkflowRevisionNodeState but uses nodeId (String) instead of nodeIdInWorkflow (AssetId)
+   * Similar to getWorkflowRevisionNodeState but uses nodeId (String) instead of nodeIdInWorkflow
    * and includes lastInputsHash field for stale detection
    */
   async getNodeState(
@@ -1751,6 +1687,3 @@ export class PipelineGraphQLClient {
     await this.client.stop()
   }
 }
-
-// Export singleton client for legacy compatibility
-export const pipelineGraphQLClient = new PipelineGraphQLClient()

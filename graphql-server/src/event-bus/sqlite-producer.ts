@@ -6,8 +6,9 @@
  * Events are stored in the EventLog table with TraceID as primary key.
  */
 
+import type { Database } from 'better-sqlite3'
 import { generateTraceId } from 'playtiss/types/trace_id'
-import type { Database as SQLiteDatabase } from 'sqlite3'
+
 import type { Event, IEventProducer } from './interfaces.js'
 
 /**
@@ -23,14 +24,14 @@ export class SqliteEventProducer implements IEventProducer {
    *
    * @param topic Event topic (e.g., "task_completed")
    * @param payload Event data (will be JSON-stringified)
-   * @param db SQLite database instance
+   * @param db better-sqlite3 database instance
    * @returns The created event
    */
-  async produce(
+  produce(
     topic: string,
     payload: object,
-    db: SQLiteDatabase,
-  ): Promise<Event> {
+    db: Database,
+  ): Event {
     // Generate TraceID for event (provides timestamp, sortability, audit trail)
     const event: Event = {
       id: generateTraceId(),
@@ -41,19 +42,10 @@ export class SqliteEventProducer implements IEventProducer {
 
     // Insert event into EventLog table
     // This will be part of the caller's transaction
-    return new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO EventLog (event_id, topic, payload, timestamp_created) VALUES (?, ?, ?, ?)`,
-        [event.id, event.topic, JSON.stringify(event.payload), event.timestamp],
-        (err) => {
-          if (err) {
-            reject(new Error(`Failed to produce event: ${err.message}`))
-          }
-          else {
-            resolve(event)
-          }
-        },
-      )
-    })
+    db.prepare(
+      `INSERT INTO EventLog (event_id, topic, payload, timestamp_created) VALUES (?, ?, ?, ?)`,
+    ).run(event.id, event.topic, JSON.stringify(event.payload), event.timestamp)
+
+    return event
   }
 }

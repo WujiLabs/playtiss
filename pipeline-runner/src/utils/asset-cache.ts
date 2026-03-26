@@ -2,6 +2,7 @@
 import { LRUCache } from 'lru-cache'
 import { type AssetId, type AssetValue } from 'playtiss'
 import { load } from 'playtiss/asset-store'
+
 import { getLimiter } from './concurrency-limiter.js'
 
 const assetLoadCache = new LRUCache<AssetId, Promise<AssetValue>>({
@@ -25,7 +26,8 @@ export async function loadCached(assetId: AssetId): Promise<AssetValue> {
   assetLoadCache.set(assetId, loadPromise)
   try {
     return await loadPromise
-  } catch (error) {
+  }
+  catch (error) {
     assetLoadCache.delete(assetId)
     throw error
   }

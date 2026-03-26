@@ -13,6 +13,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { type TraceId } from 'playtiss'
 import type { UserActionId } from 'playtiss/types/playtiss'
+
 import { SqliteEventConsumer } from '../event-bus/sqlite-consumer.js'
 import {
   handlePlayerFailedEvent,
@@ -422,7 +423,6 @@ export class WorkflowEngine {
    */
   private async extendLease(
     taskId: TraceId,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _currentLease: { claimedAt: number, ttl: number },
   ): Promise<void> {
     try {

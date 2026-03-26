@@ -31,7 +31,7 @@
     "graphql-scalars": "catalog:",
     "multiformats": "catalog:",
     "playtiss": "workspace:*",
-    "sqlite3": "catalog:"
+    "better-sqlite3": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
@@ -40,6 +40,7 @@
     "@graphql-codegen/typescript-resolvers": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
     "@types/aws-lambda": "catalog:",
+    "@types/better-sqlite3": "catalog:",
     "@types/cors": "catalog:",
     "@types/express": "catalog:",
     "@types/node": "catalog:",

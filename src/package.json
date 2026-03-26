@@ -75,12 +75,12 @@
   },
   "optionalDependencies": {
     "dotenv": "catalog:",
-    "sqlite": "catalog:",
-    "sqlite3": "catalog:"
+    "better-sqlite3": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@ipld/dag-cbor": "^9.2.5",
+    "@types/better-sqlite3": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
     "@types/fs-extra": "catalog:",
     "@types/node": "catalog:",

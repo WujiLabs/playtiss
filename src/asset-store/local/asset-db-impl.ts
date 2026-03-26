@@ -1,38 +1,38 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import fs from 'fs/promises'
+import type { Database as DatabaseType } from 'better-sqlite3'
+import Database from 'better-sqlite3'
+import { existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import path from 'path'
-import { type Database, open } from 'sqlite'
-import sqlite3 from 'sqlite3'
+
 import { type AssetId } from '../../index.js'
 import { type UserActionId, type VersionId } from '../../types/playtiss.js'
 
 // Database connection management
-// Note: SQLite dependencies are guaranteed to exist when this file is loaded
-// because asset-db.ts verifies them before dynamically importing this file
-let db: Database | null = null
+// Note: better-sqlite3 dependency is guaranteed to exist when this file is loaded
+// because asset-db.ts verifies it before dynamically importing this file
+let db: DatabaseType | null = null
 
-async function getDatabase(): Promise<Database> {
+function getDatabase(): DatabaseType {
   if (!db) {
     // Always save to ~/.playtiss/assets.db regardless of storage backend
     const dbDir = path.join(homedir(), '.playtiss')
-    await fs.mkdir(dbDir, { recursive: true })
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true })
+    }
     const dbPath = path.join(dbDir, 'assets.db')
 
-    db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database,
-    })
+    db = new Database(dbPath)
 
     // Create tables if they don't exist
-    await initializeTables(db)
+    initializeTables(db)
   }
   return db
 }
 
-async function initializeTables(database: Database): Promise<void> {
+function initializeTables(database: DatabaseType): void {
   // Create Assets table
-  await database.exec(`
+  database.exec(`
     CREATE TABLE IF NOT EXISTS Assets (
       asset_content_hash TEXT PRIMARY KEY,
       size_bytes INTEGER NOT NULL,
@@ -42,7 +42,7 @@ async function initializeTables(database: Database): Promise<void> {
   `)
 
   // Create AssetReferences table
-  await database.exec(`
+  database.exec(`
     CREATE TABLE IF NOT EXISTS AssetReferences (
       parent_asset_hash TEXT NOT NULL,
       child_asset_hash TEXT NOT NULL,
@@ -53,7 +53,7 @@ async function initializeTables(database: Database): Promise<void> {
   `)
 
   // Create AssetToActionReferences table (v7 addition for future GC support)
-  await database.exec(`
+  database.exec(`
     CREATE TABLE IF NOT EXISTS AssetToActionReferences (
       parent_asset_hash TEXT NOT NULL,
       used_action_task_id TEXT NOT NULL,
@@ -63,7 +63,7 @@ async function initializeTables(database: Database): Promise<void> {
   `)
 
   // Create AssetToVersionReferences table (v9 addition for Context assets)
-  await database.exec(`
+  database.exec(`
     CREATE TABLE IF NOT EXISTS AssetToVersionReferences (
       parent_asset_hash TEXT NOT NULL,
       child_version_id TEXT NOT NULL,
@@ -79,17 +79,16 @@ export async function saveAssetRecord(
   buffer: Uint8Array,
   mimeType?: string,
 ): Promise<void> {
-  const database = await getDatabase()
+  const database = getDatabase()
 
-  await database.run(
+  database.prepare(
     `INSERT OR IGNORE INTO Assets (
-      asset_content_hash, 
-      size_bytes, 
-      mime_type, 
+      asset_content_hash,
+      size_bytes,
+      mime_type,
       timestamp_created
     ) VALUES (?, ?, ?, ?)`,
-    [assetId, buffer.length, mimeType, Date.now()],
-  )
+  ).run(assetId, buffer.length, mimeType, Date.now())
 }
 
 export async function saveAssetReferences(
@@ -98,40 +97,34 @@ export async function saveAssetReferences(
 ): Promise<void> {
   if (childAssetIds.length === 0) return
 
-  const database = await getDatabase()
+  const database = getDatabase()
 
-  // Use a transaction for bulk inserts
-  await database.exec('BEGIN TRANSACTION')
+  const insertRef = database.prepare(
+    `INSERT OR IGNORE INTO AssetReferences (parent_asset_hash, child_asset_hash) VALUES (?, ?)`,
+  )
 
-  try {
+  const insertAll = database.transaction(() => {
     for (const childAssetId of childAssetIds) {
-      await database.run(
-        `INSERT OR IGNORE INTO AssetReferences (parent_asset_hash, child_asset_hash) VALUES (?, ?)`,
-        [parentAssetId, childAssetId],
-      )
+      insertRef.run(parentAssetId, childAssetId)
     }
-    await database.exec('COMMIT')
-  }
-  catch (error) {
-    await database.exec('ROLLBACK')
-    throw error
-  }
+  })
+
+  insertAll()
 }
 
 export async function hasAssetRecord(assetId: AssetId): Promise<boolean> {
-  const database = await getDatabase()
-  const result = await database.get(
+  const database = getDatabase()
+  const result = database.prepare(
     'SELECT 1 FROM Assets WHERE asset_content_hash = ?',
-    [assetId],
-  )
+  ).get(assetId)
   return result !== undefined
 }
 
 // TODO: Implement AssetToActionReferences population logic
 // This function should be called when storing workflow definitions that reference user actions
 export async function saveAssetToActionReferences(
-  parentAssetId: AssetId,
-  userActionIds: UserActionId[],
+  _parentAssetId: AssetId,
+  _userActionIds: UserActionId[],
 ): Promise<void> {
   // TODO: Implement this function to populate AssetToActionReferences table
   // when workflow definitions are stored that reference user action IDs
@@ -143,8 +136,8 @@ export async function saveAssetToActionReferences(
 // TODO: Implement AssetToVersionReferences population logic
 // This function should be called when storing Context assets that reference versions
 export async function saveAssetToVersionReferences(
-  parentAssetId: AssetId,
-  versionIds: VersionId[],
+  _parentAssetId: AssetId,
+  _versionIds: VersionId[],
 ): Promise<void> {
   // TODO: Implement this function to populate AssetToVersionReferences table
   // when Context assets are stored that reference version IDs
@@ -155,7 +148,7 @@ export async function saveAssetToVersionReferences(
 
 export async function closeDatabase(): Promise<void> {
   if (db) {
-    await db.close()
+    db.close()
     db = null
   }
 }

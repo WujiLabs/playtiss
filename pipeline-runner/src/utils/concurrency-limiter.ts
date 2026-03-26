@@ -22,15 +22,14 @@ const CONCURRENCY_LIMITS = {
 } as const
 
 // Type for valid limiter keys
-export type LimiterKey = keyof typeof CONCURRENCY_LIMITS | 'default'
+export type LimiterKey = keyof typeof CONCURRENCY_LIMITS
 
 // Global registry of limiters
-const limiters: Record<LimiterKey, ReturnType<typeof pLimit>> = {} as any
-
-// Initialize all limiters
-for (const [key, limit] of Object.entries(CONCURRENCY_LIMITS)) {
-  limiters[key as LimiterKey] = pLimit(limit)
-}
+const limiters = Object.fromEntries(
+  Object.entries(CONCURRENCY_LIMITS).map(
+    ([key, limit]) => [key, pLimit(limit)],
+  ),
+) as Record<LimiterKey, ReturnType<typeof pLimit>>
 
 /**
  * Get a concurrency limiter for the specified operation type

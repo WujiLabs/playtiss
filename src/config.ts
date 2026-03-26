@@ -44,7 +44,7 @@ async function findAndLoadEnv(): Promise<string | null> {
     // No .env file found - silent fallback to environment variables
     return null
   }
-  catch (e) {
+  catch {
     // Error in path resolution - fallback to environment variables
     return null
   }
@@ -67,7 +67,7 @@ async function ensureDotenvLoaded() {
 
       dotenvLoaded = true
     }
-    catch (e) {
+    catch {
       // Ignore if dotenv is not available
     }
   }
@@ -114,13 +114,13 @@ export const getEnv = (key: string, defaultValue: string = ''): string => {
         // The async version in ensureDotenvLoaded() will handle ESM properly
         dotenvLoaded = true
       }
-      catch (e) {
+      catch {
         // Ignore if dotenv loading fails - environment variables may still be available
       }
     }
     return process.env[key] || defaultValue
   }
-  catch (e) {
+  catch {
     return defaultValue
   }
 }

@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import * as dagJSON from '@ipld/dag-json'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
-import * as dagJSON from '@ipld/dag-json'
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
+
 import { computeHash } from '../asset-store/compute_hash.js'
 import { isAssetId } from '../types/asset_id.js'
 

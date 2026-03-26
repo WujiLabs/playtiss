@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import { load } from '../asset-store/index.js'
 import { type AssetId } from '../index.js'
-import { isTraceId } from '../types/trace_id.js'
+import { isTraceId, type TraceId } from '../types/trace_id.js'
 import { type Edge, type Node, type Pipeline } from './index.js'
 
 export interface NodeSlotInfo {
-  node: AssetId | null // null indicates pipeline output
+  node: TraceId | null // null indicates pipeline output
   context_edges: Edge[] // target is context slot (% prefix)
   data_edges: Edge[] // target is data slot (no prefix)
   meta_edges: Edge[] // target is meta slot (^ prefix)
@@ -14,12 +14,12 @@ export interface NodeSlotInfo {
 type NodeType = 'regular' | 'merge' | 'task_split' | 'task_merge' | 'const'
 
 export interface PipelineInfo {
-  nodes: Record<AssetId, Node>
+  nodes: Record<TraceId, Node>
   input_next: NodeSlotInfo[]
-  node_nexts: Record<AssetId, NodeSlotInfo[]>
-  node_slots: Record<AssetId, string[]>
-  node_meta_slots: Record<AssetId, string[]>
-  node_types: Record<AssetId, NodeType>
+  node_nexts: Record<TraceId, NodeSlotInfo[]>
+  node_slots: Record<TraceId, string[]>
+  node_meta_slots: Record<TraceId, string[]>
+  node_types: Record<TraceId, NodeType>
   output_type: NodeType
   output_slots: string[]
 }
@@ -28,19 +28,19 @@ export interface PipelineInfo {
 // Step 1: Build adjacency from edges
 // ================================================================
 
-type TargetKey = AssetId | 'output'
+type TargetKey = TraceId | 'output'
 
 interface Adjacency {
   /** For each target (node or 'output'), the distinct source node IDs feeding into it */
-  incomingSources: Map<TargetKey, Set<AssetId | null>>
+  incomingSources: Map<TargetKey, Set<TraceId | null>>
   /** For each target (node or 'output'), the set of data slot names (no prefix) */
   targetSlotNames: Map<TargetKey, Set<string>>
   /** For each target (node or 'output'), the set of meta slot names (^ prefix) */
   targetMetaSlotNames: Map<TargetKey, Set<string>>
 }
 
-function buildAdjacency(edges: Record<AssetId, Edge>): Adjacency {
-  const incomingSources = new Map<TargetKey, Set<AssetId | null>>()
+function buildAdjacency(edges: Record<TraceId, Edge>): Adjacency {
+  const incomingSources = new Map<TargetKey, Set<TraceId | null>>()
   const targetSlotNames = new Map<TargetKey, Set<string>>()
   const targetMetaSlotNames = new Map<TargetKey, Set<string>>()
 
@@ -83,20 +83,29 @@ function buildAdjacency(edges: Record<AssetId, Edge>): Adjacency {
 // ================================================================
 
 function classifyNodeTypes(
-  nodes: Record<AssetId, Node>,
+  nodes: Record<TraceId, Node>,
   adjacency: Adjacency,
-): { nodeTypes: Record<AssetId, NodeType>, outputType: NodeType } {
-  const nodeTypes: Record<AssetId, NodeType> = {}
+): { nodeTypes: Record<TraceId, NodeType>, outputType: NodeType } {
+  const nodeTypes: Record<TraceId, NodeType> = {}
 
   // First pass: assign base type from action field
   for (const [nodeId, node] of Object.entries(nodes)) {
-    const id = nodeId as AssetId
+    const id = nodeId as TraceId
     if (!isTraceId(node.action)) {
       // Builtin action
       switch (node.action) {
-        case 'split': nodeTypes[id] = 'task_split'; break
-        case 'merge': nodeTypes[id] = 'task_merge'; break
-        case 'const': nodeTypes[id] = 'const'; break
+        case 'split': {
+          nodeTypes[id] = 'task_split'
+          break
+        }
+        case 'merge': {
+          nodeTypes[id] = 'task_merge'
+          break
+        }
+        case 'const': {
+          nodeTypes[id] = 'const'
+          break
+        }
         default: throw new Error(`built in action ${node.action} not implemented`)
       }
     }
@@ -108,7 +117,7 @@ function classifyNodeTypes(
   // Second pass: promote regular nodes with multiple distinct sources to 'merge'
   for (const [targetKey, sources] of adjacency.incomingSources) {
     if (targetKey === 'output') continue
-    const nodeId = targetKey as AssetId
+    const nodeId = targetKey as TraceId
     if (sources.size > 1 && nodeTypes[nodeId] !== undefined) {
       if (nodeTypes[nodeId] === 'regular' || nodeTypes[nodeId] === 'merge') {
         nodeTypes[nodeId] = 'merge'
@@ -131,19 +140,19 @@ function classifyNodeTypes(
 // ================================================================
 
 function buildDownstreamMap(
-  edges: Record<AssetId, Edge>,
+  edges: Record<TraceId, Edge>,
 ): {
-    inputConnections: NodeSlotInfo[]
-    downstreamMap: Record<AssetId, NodeSlotInfo[]>
-  } {
+  inputConnections: NodeSlotInfo[]
+  downstreamMap: Record<TraceId, NodeSlotInfo[]>
+} {
   // Group edges by (sourceNodeId, targetNodeId) pair, consolidating tag/slot/meta edges
   const grouped = new Map<string, NodeSlotInfo>()
 
-  function getGroupKey(sourceNode: AssetId | null, targetNode: AssetId | null): string {
+  function getGroupKey(sourceNode: TraceId | null, targetNode: TraceId | null): string {
     return `${sourceNode ?? 'null'}|${targetNode ?? 'null'}`
   }
 
-  function getOrCreateSlotInfo(key: string, targetNode: AssetId | null): NodeSlotInfo {
+  function getOrCreateSlotInfo(key: string, targetNode: TraceId | null): NodeSlotInfo {
     let existing = grouped.get(key)
     if (!existing) {
       existing = { node: targetNode, context_edges: [], data_edges: [], meta_edges: [] }
@@ -172,7 +181,7 @@ function buildDownstreamMap(
 
   // Partition into pipeline-input connections vs node-to-node connections
   const inputConnections: NodeSlotInfo[] = []
-  const downstreamMap: Record<AssetId, NodeSlotInfo[]> = {}
+  const downstreamMap: Record<TraceId, NodeSlotInfo[]> = {}
 
   for (const [key, slotInfo] of grouped) {
     const [sourceStr] = key.split('|')
@@ -180,7 +189,7 @@ function buildDownstreamMap(
       inputConnections.push(slotInfo)
     }
     else {
-      const sourceId = sourceStr as AssetId
+      const sourceId = sourceStr as TraceId
       if (!(sourceId in downstreamMap)) {
         downstreamMap[sourceId] = []
       }
@@ -198,12 +207,12 @@ function buildDownstreamMap(
 function extractSlotNames(
   adjacency: Adjacency,
 ): {
-    nodeSlots: Record<AssetId, string[]>
-    nodeMetaSlots: Record<AssetId, string[]>
-    outputSlots: string[]
-  } {
-  const nodeSlots: Record<AssetId, string[]> = {}
-  const nodeMetaSlots: Record<AssetId, string[]> = {}
+  nodeSlots: Record<TraceId, string[]>
+  nodeMetaSlots: Record<TraceId, string[]>
+  outputSlots: string[]
+} {
+  const nodeSlots: Record<TraceId, string[]> = {}
+  const nodeMetaSlots: Record<TraceId, string[]> = {}
   let outputSlots: string[] = []
 
   for (const [targetKey, names] of adjacency.targetSlotNames) {
@@ -211,13 +220,13 @@ function extractSlotNames(
       outputSlots = Array.from(names)
     }
     else {
-      nodeSlots[targetKey as AssetId] = Array.from(names)
+      nodeSlots[targetKey as TraceId] = Array.from(names)
     }
   }
 
   for (const [targetKey, names] of adjacency.targetMetaSlotNames) {
     if (targetKey !== 'output') {
-      nodeMetaSlots[targetKey as AssetId] = Array.from(names)
+      nodeMetaSlots[targetKey as TraceId] = Array.from(names)
     }
   }
 

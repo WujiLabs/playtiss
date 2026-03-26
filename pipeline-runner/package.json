@@ -26,7 +26,7 @@
     "p-limit": "catalog:",
     "playtiss": "workspace:*",
     "react": "catalog:",
-    "sqlite3": "catalog:"
+    "better-sqlite3": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
@@ -35,7 +35,7 @@
     "@stylistic/eslint-plugin": "catalog:",
     "@types/jest": "catalog:",
     "@types/node": "catalog:",
-    "@types/sqlite3": "catalog:",
+    "@types/better-sqlite3": "catalog:",
     "globals": "catalog:",
     "jest": "catalog:",
     "jest-environment-node": "catalog:",

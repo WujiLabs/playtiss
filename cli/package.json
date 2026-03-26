@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "description": "CLI tool for Playtiss Kernel",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "bin": {
-    "playtiss": "dist/index.js"
+    "playtiss": "dist/src/index.js"
   },
   "scripts": {
     "build": "pnpm run codegen && tsc",
     "codegen": "graphql-codegen --config codegen.ts",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "test": "vitest",
     "type-check": "tsc --noEmit",
     "inspect:asset": "tsx dev-tools/inspect-asset.ts",
@@ -28,7 +28,7 @@
     "graphql": "catalog:",
     "playtiss": "workspace:*",
     "react": "catalog:",
-    "sqlite3": "catalog:"
+    "better-sqlite3": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
@@ -37,7 +37,7 @@
     "@stylistic/eslint-plugin": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "^19.2.3",
-    "@types/sqlite3": "catalog:",
+    "@types/better-sqlite3": "catalog:",
     "globals": "catalog:",
     "tsx": "^4.7.0",
     "typescript": "catalog:",

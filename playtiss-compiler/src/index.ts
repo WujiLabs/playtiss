@@ -31,7 +31,7 @@
  */
 
 // Main API
-export { compile, toExecutable, tryStringify, type StoreFunction } from './executable.js'
+export { compile, toExecutable, tryStringify } from './executable.js'
 export { parse } from './parser.js'
 export { stringify } from './stringifier.js'
 export { throwOnValidationError, validate } from './validator.js'

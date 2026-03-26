@@ -3,29 +3,26 @@
 // Original source / algorithm or asset licensed from:
 // Pinscreen, Inc.
 // https://www.pinscreen.com/
+import { LRUCache } from 'lru-cache'
+import pLimit from 'p-limit'
 import {
   type ActionId,
   type AssetId,
   type AssetValue,
   type DictAsset,
-  type SystemActionId,
 } from 'playtiss'
 import { computeHash, load, store } from 'playtiss/asset-store'
-import { type Edge, type Node, isConstNode } from 'playtiss/pipeline'
+import { type Edge, isConstNode } from 'playtiss/pipeline'
 import {
   type NodeSlotInfo,
-  type PipelineInfo,
   parsePipeline,
+  type PipelineInfo,
 } from 'playtiss/pipeline/parser'
-import pLimit from 'p-limit'
-import { LRUCache } from 'lru-cache'
-import { type TraceId, isTraceId } from 'playtiss/types/trace_id'
+import { isTraceId, type TraceId } from 'playtiss/types/trace_id'
+
 import type { Task } from '../graphql/types.js'
 import { getLimiter, withLimit } from '../utils/concurrency-limiter.js'
 import {
-  type MetaValues,
-  type V12Context,
-  type V12WorkflowExecutionContext,
   createPartialTaskInputs,
   createTaskRecord,
   deletePartialTaskInputs,
@@ -35,7 +32,10 @@ import {
   getTaskInputs,
   getTaskRecords,
   getWorkflowTaskIdFromRevisionId,
+  type MetaValues,
   updatePartialTaskInputs,
+  type V12Context,
+  type V12WorkflowExecutionContext,
 } from './model.js'
 
 // ================================================================
@@ -213,7 +213,7 @@ async function reportTaskOutcome(
 }
 
 function isOutputNode(
-  node: AssetId | null,
+  node: TraceId | null,
 ): node is null {
   return node === null
 }
@@ -245,7 +245,7 @@ async function createNodeTask(
   pipelineInfo: PipelineInfo,
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  node: AssetId,
+  node: TraceId,
   asset: DictAsset,
 ): Promise<Task> {
   const actionId = pipelineInfo.nodes[node].action
@@ -280,7 +280,7 @@ async function processNodeReady(
   pipelineInfo: PipelineInfo,
   context: V12Context,
   workflowContext: V12WorkflowExecutionContext,
-  node: AssetId,
+  node: TraceId,
   combinedAsset: DictAsset, // contains both data keys and ^meta keys
 ): Promise<Task | null> {
   const actionId = pipelineInfo.nodes[node].action
@@ -410,9 +410,6 @@ function extractMetaKeys(asset: DictAsset): MetaValues {
   return result
 }
 
-// TODO: remove this once we migrate to v12
-const taskMergeAction: SystemActionId = 'core:orchestrator.task_merge'
-
 async function resolveNestedValue(
   asset: DictAsset,
   key: string,
@@ -539,7 +536,7 @@ async function resolveMetaEdges(
  *
  * Structure: Map<workflowRevisionId, Map<nextNodeId, Promise>>
  * - First level key: workflowRevisionId (TraceId) - different revisions don't block each other
- * - Second level key: nextNodeId (AssetId) - identifies the merge node
+ * - Second level key: nextNodeId (TraceId) - identifies the merge node
  * - Value: Promise that resolves when the critical zone completes
  *
  * TODO: Consider cleanup of completed workflow revisions to prevent unbounded memory growth.
@@ -547,17 +544,17 @@ async function resolveMetaEdges(
  */
 const criticalZoneLock = new Map<
   TraceId,
-  Map<AssetId, Promise<void>>
+  Map<TraceId, Promise<void>>
 >()
 
 async function acquireMergeNodeLock(
   revisionId: TraceId,
-  nodeId: AssetId,
+  nodeId: TraceId,
   promise: Promise<void>,
 ): Promise<void> {
   let revisionLocks = criticalZoneLock.get(revisionId)
   if (!revisionLocks) {
-    revisionLocks = new Map<AssetId, Promise<void>>()
+    revisionLocks = new Map<TraceId, Promise<void>>()
     criticalZoneLock.set(revisionId, revisionLocks)
   }
   const existingLock = revisionLocks.get(nodeId)
@@ -577,7 +574,7 @@ interface NodeHandlerArgs {
   pipeline: AssetId
   pipelineInfo: PipelineInfo
   workflowContext: V12WorkflowExecutionContext
-  nextNode: AssetId | null
+  nextNode: TraceId | null
   nextNodeSlots: string[]
   nextMetaSlots: string[]
   nextContext: V12Context
@@ -697,7 +694,7 @@ async function propagateToNode(
   // Create a promise to signal when this call's critical zone completes
   const { promise, resolve, reject } = Promise.withResolvers<void>()
   try {
-    const nextNode = nextNodeId === null ? null : nextNodeId as AssetId
+    const nextNode = nextNodeId
     const nextNodeType = nextNodeId === null
       ? pipelineInfo.output_type
       : pipelineInfo.node_types[nextNodeId]
@@ -775,7 +772,7 @@ async function fanOutSplit(
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   currentAsset: DictAsset,
-  node: AssetId,
+  node: TraceId,
 ): Promise<Task[]> {
   const input = await ensureDictOrArrayAsset(
     currentAsset['input'],
@@ -863,7 +860,7 @@ async function forwardMergeOutput(
   currentContext: V12Context,
   workflowContext: V12WorkflowExecutionContext,
   currentAsset: DictAsset,
-  node: AssetId,
+  node: TraceId,
 ): Promise<Task[]> {
   const results: PropagateResult[] = []
   for (const nodeSlotInfo of pipelineInfo.node_nexts[node]) {
@@ -942,7 +939,7 @@ export async function handleWorkflowStart(
   // Const nodes need to be initialized here since they have no upstream connections
   const constNodeRefs = Object.entries(pipelineInfo.node_types)
     .filter(([, nodeType]) => nodeType === 'const')
-    .map(([nodeRef]) => nodeRef as AssetId)
+    .map(([nodeRef]) => nodeRef as TraceId)
 
   if (constNodeRefs.length > 0) {
     console.log(`📋 Processing ${constNodeRefs.length} const nodes:`, constNodeRefs)

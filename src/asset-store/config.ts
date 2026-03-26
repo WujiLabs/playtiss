@@ -45,7 +45,7 @@ async function getDefaultLocalPath(): Promise<string> {
     ])
     return path.join(homedir(), '.playtiss')
   }
-  catch (importError: any) {
+  catch {
     // Fallback to require for CJS environments
     if (typeof require !== 'undefined') {
       const { homedir } = require('os')
@@ -100,7 +100,7 @@ export async function getConfig(): Promise<StorageConfig> {
     try {
       cachedDefaultLocalPath = await getDefaultLocalPath()
     }
-    catch (error) {
+    catch {
       // If we can't get default path and no env var is set, that's okay
       // The localPath getter will throw a more specific error when accessed
     }

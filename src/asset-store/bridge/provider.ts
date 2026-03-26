@@ -29,8 +29,10 @@ export class BridgeStorageProvider implements StorageProvider {
       })
       return response.ok
     }
-    catch (error: any) {
-      console.debug(`Bridge hasBuffer failed for asset ${id}:`, error.message)
+    catch (error) {
+      console.debug(`Bridge hasBuffer failed for asset ${id}:`,
+        error instanceof Error ? error.message : String(error),
+      )
       return false
     }
   }
@@ -48,13 +50,14 @@ export class BridgeStorageProvider implements StorageProvider {
       const arrayBuffer = await response.arrayBuffer()
       return new Uint8Array(arrayBuffer)
     }
-    catch (error: any) {
+    catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
       console.error(`Bridge fetchBuffer failed for asset ${id}:`, {
         assetId: id,
         baseUrl: this.baseUrl,
-        error: error.message,
+        error: errorMessage,
       })
-      throw new Error(`Failed to fetch asset ${id} from bridge server: ${error.message}`)
+      throw new Error(`Failed to fetch asset ${id} from bridge server: ${errorMessage}`)
     }
   }
 
@@ -76,14 +79,15 @@ export class BridgeStorageProvider implements StorageProvider {
 
       console.debug(`Bridge asset saved: ${id} (${buffer.length} bytes)`)
     }
-    catch (error: any) {
+    catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
       console.error(`Bridge saveBuffer failed for asset ${id}:`, {
         assetId: id,
         bufferSize: buffer.length,
         baseUrl: this.baseUrl,
-        error: error.message,
+        error: errorMessage,
       })
-      throw new Error(`Failed to save asset ${id} to bridge server: ${error.message}`)
+      throw new Error(`Failed to save asset ${id} to bridge server: ${errorMessage}`)
     }
   }
 
