@@ -11,9 +11,9 @@ VERBOSE=false
 [[ "${1:-}" == "--verbose" ]] && VERBOSE=true
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ACTION_ID="019d28d5-41ce-8934-8e0a-07efec000001"
-SPLIT_ACTION_ID="019d28d5-42e1-8205-8ae2-6cf565000001"
-UPSTREAM_NODE_ID="019d28d5-41cf-8899-8ec8-066a33000001" # Node 1 (A+B), feeds into Node 2
+ACTION_ID="019d9f37-9326-8ddf-84ff-9f90e2000001"
+SPLIT_ACTION_ID="019d9f37-9445-869f-8506-fc95b8000001"
+UPSTREAM_NODE_ID="019d9f37-9328-8712-885b-b7a1c8000001" # Node 1 (A+B), feeds into Node 2
 TEST_DB_SOURCE="$PROJECT_ROOT/graphql-server/playtiss-test-add3.db"
 TEMP_DB=""
 PIDS=()

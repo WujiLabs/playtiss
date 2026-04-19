@@ -1,4 +1,5 @@
 packages:
+  - playtiss-core
   - src
   - graphql-server
   - pipeline-runner

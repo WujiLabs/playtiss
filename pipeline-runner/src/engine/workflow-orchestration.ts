@@ -13,10 +13,7 @@
  * 5. Return - event bus takes over from here
  */
 
-import {
-  type AssetId,
-  type TraceId,
-} from 'playtiss'
+import type { AssetId, TraceId } from '@playtiss/core'
 import { type Pipeline } from 'playtiss/pipeline'
 
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
@@ -274,7 +271,7 @@ async function processFailedTask(
   const taskId = task.id!
 
   // Step 1: Load error output (or use empty object)
-  let errorOutput: import('playtiss').AssetValue = {}
+  let errorOutput: import('@playtiss/core').AssetValue = {}
   if (task.currentVersion?.asset_content_hash) {
     errorOutput = await loadCached(
       task.currentVersion.asset_content_hash as AssetId,

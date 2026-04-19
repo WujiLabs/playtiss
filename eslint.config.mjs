@@ -9,10 +9,12 @@ import { mainConfig, paths as mainPaths } from './eslint.base.mjs'
 import { config as graphqlServerConfig, paths as graphqlServerPaths } from './graphql-server/eslint.config.mjs'
 import { config as pipelineRunnerConfig, paths as pipelineRunnerPaths } from './pipeline-runner/eslint.config.mjs'
 import { config as compilerConfig, paths as compilerPaths } from './playtiss-compiler/eslint.config.mjs'
+import { config as coreConfig, paths as corePaths } from './playtiss-core/eslint.config.mjs'
 import { config as playtissConfig, paths as playtissPaths } from './src/eslint.config.mjs'
 import { config as typescriptWorkerConfig, paths as typescriptWorkerPaths } from './typescript-worker/eslint.config.mjs'
 
 const external = {
+  core: { path: 'playtiss-core', ...corePaths },
   graphqlServer: { path: 'graphql-server', ...graphqlServerPaths },
   playtiss: { path: 'src', ...playtissPaths },
   pipelineRunner: { path: 'pipeline-runner', ...pipelineRunnerPaths },
@@ -45,6 +47,11 @@ export default defineConfig(
     },
   },
   // external config with path, main config, files, and ignores
+  ...coreConfig({
+    path: external.core.path,
+    baseConfig: mainConfig,
+    files: mainPaths.files,
+  }),
   ...graphqlServerConfig({
     path: external.graphqlServer.path,
     baseConfig: mainConfig,

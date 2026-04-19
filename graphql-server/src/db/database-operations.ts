@@ -11,10 +11,9 @@
  * - Clean separation allows easy migration to different database systems
  */
 
+import type { AssetId, TraceId } from '@playtiss/core'
 import type { Database } from 'better-sqlite3'
-import type { AssetId } from 'playtiss'
 import { default_scope_id } from 'playtiss'
-import type { TraceId } from 'playtiss/types/trace_id'
 
 import { getDB } from '../db.js'
 import { SqliteEventProducer } from '../event-bus/sqlite-producer.js'

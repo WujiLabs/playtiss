@@ -1,26 +1,28 @@
 // Copyright (c) 2026 Wuji Labs Inc
-// Universal random bytes function using Web Crypto API
+// SPDX-License-Identifier: MIT
+
+// Minimal local shape for the Web Crypto API. Keeps this module self-contained
+// and avoids depending on a DOM lib in tsconfig.
+interface WebCryptoLike {
+  getRandomValues: <T extends Uint8Array>(buffer: T) => T
+}
+
+// Web Crypto API is required. Modern browsers and Node.js >= 16 ship it.
+// We fail loud on missing crypto rather than silently downgrading to Math.random —
+// TraceIds back the content-addressing and audit story; a predictable fallback
+// would quietly compromise both. If you hit this error, upgrade your runtime.
 function randomBytes(size: number): Uint8Array {
-  // Try Web Crypto API first (available in modern browsers and Node.js 16+)
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    const buffer = new Uint8Array(size)
-    crypto.getRandomValues(buffer)
-    return buffer
+  // Intentionally use a dynamic lookup so we can detect missing-crypto at
+  // runtime in ancient environments whose type defs still declare `crypto`.
+  const c: WebCryptoLike | undefined
+    = (globalThis as { crypto?: WebCryptoLike }).crypto
+  if (c === undefined || typeof c.getRandomValues !== 'function') {
+    throw new Error(
+      'crypto.getRandomValues is unavailable — @playtiss/core requires the Web Crypto API (Node.js >= 16 or any modern browser)',
+    )
   }
-
-  // Try Node.js crypto.webcrypto (Node.js 16+ fallback)
-  if (typeof globalThis !== 'undefined' && globalThis.crypto && globalThis.crypto.getRandomValues) {
-    const buffer = new Uint8Array(size)
-    globalThis.crypto.getRandomValues(buffer)
-    return buffer
-  }
-
-  // Fallback to Math.random (not cryptographically secure, but functional)
-  console.warn('Using Math.random() fallback for crypto operations - not cryptographically secure')
   const buffer = new Uint8Array(size)
-  for (let i = 0; i < size; i++) {
-    buffer[i] = Math.floor(Math.random() * 256)
-  }
+  c.getRandomValues(buffer)
   return buffer
 }
 

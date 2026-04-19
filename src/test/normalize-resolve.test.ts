@@ -1,14 +1,12 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import * as dagJSON from '@ipld/dag-json'
+import type { AssetId, AssetValue, StorageProvider } from '@playtiss/core'
+import { computeHash } from '@playtiss/core'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { computeHash } from '../asset-store/compute_hash.js'
-import { setCustomStorageProvider } from '../asset-store/index.js'
-import { load, resolve, store } from '../asset-store/index.js'
-import type { StorageProvider } from '../asset-store/storage-provider.js'
-import type { AssetId, AssetValue } from '../index.js'
+import { load, resolve, setCustomStorageProvider, store } from '../asset-store/index.js'
 
 // ---- In-memory storage provider for tests ----
 function makeMemoryStore(): { data: Map<string, Uint8Array>, provider: StorageProvider } {
@@ -177,18 +175,20 @@ describe('store — Merkle deduplication', () => {
     expect(CID.parse(id).code).toBe(dagJSON.code)
   })
 
-  it('stored block has no nested objects — only primitives and CIDs', async () => {
+  it('stored block is the inline encoding (single I/O; sub-objects not split)', async () => {
     const { data, provider } = makeMemoryStore()
     setCustomStorageProvider(provider)
-    // store() persists exactly one block; its bytes encode a flat structure
+    // store() persists exactly one block per call. Nested objects/arrays are
+    // NOT recursively split into separate blocks — the stored bytes are the
+    // inline dag-json encoding of the input. (Merkle-ization happens in the
+    // CID computation, not in what's written to disk.)
     await store({ a: { b: 1 }, c: [2, 3] })
     expect(data.size).toBe(1) // single block
     const [bytes] = [...data.values()]
     const decoded = dagJSON.decode(bytes) as Record<string, unknown>
-    // Each value in the stored block is a CID (sub-objects/arrays are CID-linked)
-    for (const v of Object.values(decoded)) {
-      expect(v instanceof CID).toBe(true)
-    }
+    // Stored bytes preserve the inline shape — consumers load() and get
+    // the same structure they passed in, without extra fetches.
+    expect(decoded).toEqual({ a: { b: 1 }, c: [2, 3] })
   })
 
   it('store() produces exactly one block per call (O(1) I/O)', async () => {

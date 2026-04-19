@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-04-18
+
+### New package: `@playtiss/core` (MIT-licensed)
+
+Extracted the vocabulary of the Playtiss Collaboration Protocol into a new MIT-licensed
+package, `@playtiss/core`, published from `playtiss-core/`. The SDK (`playtiss`, this
+package, CC BY-NC 4.0) now consumes the vocabulary from core rather than owning it.
+
+**Contents of `@playtiss/core` v0.1.0-alpha.0:**
+
+- **Primitives**: `AssetId`, `TaskId`, `VersionId`, `UserActionId`, `SystemActionId`, `ActionId`, `ScopeId`, `TraceId`, `ValueOrLink<T>`, `NamespacedActionId<Prefix>`
+- **Content-addressing**: `AssetValue`, `DictAsset`, `CID`, `PlaytissLink`, `DagJsonLink`, `RawLink`, `isLink`, `isAssetId`
+- **Hashing**: `computeHash`, `computeTopBlock`, `cidToAssetId`
+- **Serialization**: `encodeToString`, `decodeFromString`, `dagJSON`
+- **IDs**: `generateTraceId`, `generateTraceIdBytes`, `generateOperationId`, `parseTraceId`, `isTraceId`, `TraceIdGenerator`
+- **Graph primitives**: `Graph`, `GraphNode`, `GraphEdge` (flat ReactFlow-style edges adapted from `@xyflow/react`)
+- **Relationship generics**: `TaskLike`, `VersionLike`, `ActionLike`, `DefaultTask`, `DefaultVersion`, `DefaultAction`, `isSystemAction`
+- **Storage interface**: `StorageProvider`, `AssetReferences` (generic; SDK widens with workflow-specific refs)
+
+### Breaking Changes
+
+- **Edge model flattened**: `Pipeline.Edge` changed from nested `{source: {node, name}, target: {node, name}}` to flat `{source, sourceHandle, target, targetHandle}` satisfying `GraphEdge` from core. **CIDs of edge-containing workflows have changed** — regenerate any test fixtures or persisted pipelines. No dual-parse shim; old shape is not readable.
+- **`Pipeline extends Graph`**: Pipeline is now a concrete narrowing of the generic `Graph` from core. Any Graph consumer (proxy, visualizer, third-party harness) can process a Pipeline through the shared primitive.
+- **Core types no longer exported from `playtiss` barrel**. The following moved to `@playtiss/core`:
+  - **Types**: `AssetId`, `AssetValue`, `DictAsset`, `CID`, `DagJsonLink`, `RawLink`, `PlaytissLink`, `TraceId`, `TraceIdGenerator`, `TaskId`, `VersionId`, `UserActionId`, `SystemActionId`, `ActionId`, `ScopeId`, `NamespacedActionId<Prefix>`, `ValueOrLink<T>`
+  - **Functions / guards**: `isAssetId`, `isLink`, `isTraceId`, `isSystemAction`, `generateTraceId`, `generateTraceIdBytes`, `generateOperationId`, `parseTraceId`, `computeHash`, `computeTopBlock`, `cidToAssetId`, `encodeToString`, `decodeFromString`
+  - **Storage contract**: `StorageProvider`, generic `AssetReferences`
+  - Update imports:
+    - `import type { AssetId } from 'playtiss'` → `import type { AssetId } from '@playtiss/core'`
+    - `import { generateTraceId } from 'playtiss/types/trace_id'` → `import { generateTraceId } from '@playtiss/core'`
+    - `import { encodeToString } from 'playtiss/types/json'` → `import { encodeToString } from '@playtiss/core'`
+    - `import type { StorageProvider } from 'playtiss/asset-store'` → `import type { StorageProvider } from '@playtiss/core'`
+    - `import { computeHash } from 'playtiss/asset-store'` → `import { computeHash } from '@playtiss/core'`
+- **Relationship generics replace concrete Task/Version/Action in core**: Core ships `TaskLike<TId, TActionId, TInput, TVersionId>`, `VersionLike<TVersionId, TTaskId, TAsset>`, and `ActionLike<T extends TaskLike<...>>`. The SDK's concrete `Task`, `Version`, `Action` shapes live in `playtiss` and satisfy these generics — machine-checkable via `type _ok = Task extends TaskLike<...> ? true : never`.
+- **`SystemActionId` type**: moved to `@playtiss/core`; the concrete `SYSTEM_ACTIONS` registry remains in `playtiss/system-actions`.
+- **Removed sub-path exports from `playtiss`**: `playtiss/types/json`, `playtiss/types/trace_id`, `playtiss/types/playtiss`, `playtiss/types/text` are gone. Use `@playtiss/core` directly.
+- **`trace-id` now throws on missing Web Crypto API**: the `Math.random` fallback is deleted. Any runtime without `crypto.getRandomValues` fails loud at `generateTraceId()` instead of silently downgrading to non-cryptographic randomness.
+- **`getTime()` helper removed** from the `playtiss` barrel (was dead code).
+
+### Changed
+
+- **License boundary**: `@playtiss/core` is MIT; `playtiss` (the SDK) remains CC BY-NC 4.0. The split is the infrastructure for the Collaboration Protocol thesis — any third-party tool that wants to emit vocabulary-compliant DAGs depends on the MIT layer without taking on the NC-licensed SDK.
+- **Pipeline file header**: `src/pipeline/index.ts` no longer carries the Pinscreen attribution. The Edge rewrite and Graph primitive extraction together remove the residual structural overlap with prior-art upstream code; the file is now fully Wuji Labs copyright.
+- **pnpm workspace**: added `playtiss-core` as a workspace member; root build script builds core first.
+- **Test coverage**: 69 tests in `@playtiss/core` (trace-id bit layout, json roundtrip, graph CID stability, hash Merkle-ization, relationship-generic conformance). Integration test (`scripts/integration-test.sh`) passes all 13 assertions end-to-end.
+- **Test DB regenerated**: `graphql-server/playtiss-test-add3.db` rebuilt with new edge shape; action IDs refreshed in `scripts/integration-test.sh`, `pipeline-runner/src/index.ts`, and `typescript-worker/src/sample_add_two.ts`.
+
+### Removed
+
+- **Dead pipeline slot types**: `EdgeSourceSlot`, `EdgeTargetSlot`, `NodeInputSlot`, `NodeOutputSlot`, `PipelineInputSlot`, `PipelineOutputSlot` — all obsolete after the edge flattening.
+- **`createSystemActionId` helper**: was a one-line type cast; callers can cast inline.
+- **`src/types/asset_id.ts`, `asset_value.ts`, `json.ts`, `trace_id.ts`**: moved to `@playtiss/core/src/`.
+- **`src/asset-store/compute_hash.ts`, `storage-provider.ts`**: moved to `@playtiss/core/src/`.
+
 ## [0.4.0] - 2026-03-26
 
 ### Breaking Changes

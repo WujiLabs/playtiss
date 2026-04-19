@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId } from 'playtiss'
+import { type AssetId } from '@playtiss/core'
 import { store } from 'playtiss/asset-store'
 
 // Cache the default context asset ID to avoid re-computing it

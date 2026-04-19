@@ -30,6 +30,7 @@
     "graphql": "catalog:",
     "graphql-scalars": "catalog:",
     "multiformats": "catalog:",
+    "@playtiss/core": "workspace:*",
     "playtiss": "workspace:*",
     "better-sqlite3": "catalog:"
   },

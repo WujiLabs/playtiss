@@ -6,8 +6,8 @@
  * Events are stored in the EventLog table with TraceID as primary key.
  */
 
+import { generateTraceId } from '@playtiss/core'
 import type { Database } from 'better-sqlite3'
-import { generateTraceId } from 'playtiss/types/trace_id'
 
 import type { Event, IEventProducer } from './interfaces.js'
 

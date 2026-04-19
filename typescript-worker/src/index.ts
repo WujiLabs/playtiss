@@ -9,8 +9,8 @@
 // Auto-load configuration before importing other modules
 import './config.js'
 
-import type { ActionId, DictAsset } from 'playtiss'
-import { isTraceId } from 'playtiss/types/trace_id'
+import type { ActionId, DictAsset } from '@playtiss/core'
+import { isTraceId } from '@playtiss/core'
 
 import { getWorkerConfig, validateConfig } from './config.js'
 import { createClient } from './graphql-client.js'

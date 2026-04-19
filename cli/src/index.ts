@@ -6,14 +6,12 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 import { ApolloClient, InMemoryCache } from '@apollo/client/index.js'
+import type { ActionId, AssetId, AssetValue, DictAsset, TraceId } from '@playtiss/core'
+import { decodeFromString, isAssetId, isTraceId } from '@playtiss/core'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { existsSync, readFileSync } from 'fs'
-import type { ActionId, AssetId, AssetValue, DictAsset, TraceId } from 'playtiss'
-import { isAssetId } from 'playtiss'
 import { store } from 'playtiss/asset-store'
-import { decodeFromString } from 'playtiss/types/json'
-import { isTraceId } from 'playtiss/types/trace_id'
 
 // Compatibility alias for the IPLD migration
 type LazyAsset = AssetValue

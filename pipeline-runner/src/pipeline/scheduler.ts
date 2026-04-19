@@ -3,22 +3,24 @@
 // Original source / algorithm or asset licensed from:
 // Pinscreen, Inc.
 // https://www.pinscreen.com/
-import { LRUCache } from 'lru-cache'
-import pLimit from 'p-limit'
 import {
   type ActionId,
   type AssetId,
   type AssetValue,
+  computeHash,
   type DictAsset,
-} from 'playtiss'
-import { computeHash, load, store } from 'playtiss/asset-store'
+  isTraceId,
+  type TraceId,
+} from '@playtiss/core'
+import { LRUCache } from 'lru-cache'
+import pLimit from 'p-limit'
+import { load, store } from 'playtiss/asset-store'
 import { type Edge, isConstNode } from 'playtiss/pipeline'
 import {
   type NodeSlotInfo,
   parsePipeline,
   type PipelineInfo,
 } from 'playtiss/pipeline/parser'
-import { isTraceId, type TraceId } from 'playtiss/types/trace_id'
 
 import type { Task } from '../graphql/types.js'
 import { getLimiter, withLimit } from '../utils/concurrency-limiter.js'
@@ -386,11 +388,12 @@ async function processNodeReady(
   }
 }
 
-function isContextSlot(name: string): name is `%${string}` {
+// Exported for unit tests — prefix classifiers are load-bearing for edge routing.
+export function isContextSlot(name: string): name is `%${string}` {
   return name.startsWith('%')
 }
 
-function isMetaSlot(name: string): name is `^${string}` {
+export function isMetaSlot(name: string): name is `^${string}` {
   return name.startsWith('^')
 }
 
@@ -442,24 +445,29 @@ async function resolveNestedValue(
 
 /**
  * Resolve tag edges into a context object.
+ *
+ * Exported for unit tests — these resolvers are the runtime data-flow path
+ * that moves values from one node's output to another node's input slot.
+ * A miscategorization of prefix (%, ^, plain) here silently corrupts the
+ * asset dict and the bug only surfaces far downstream.
  */
-async function resolveContextEdges(
+export async function resolveContextEdges(
   tagEdges: Edge[],
   currentContext: V12Context,
   currentAsset: DictAsset,
 ): Promise<V12Context> {
   const nextContext: V12Context = {}
-  for (const { source, target } of tagEdges) {
-    const value = isContextSlot(source.name)
-      ? currentContext[source.name]
-      : isMetaSlot(source.name)
-        ? currentAsset[source.name]
-        : await resolveNestedValue(currentAsset, source.name)
+  for (const { sourceHandle, targetHandle } of tagEdges) {
+    const value = isContextSlot(sourceHandle)
+      ? currentContext[sourceHandle]
+      : isMetaSlot(sourceHandle)
+        ? currentAsset[sourceHandle]
+        : await resolveNestedValue(currentAsset, sourceHandle)
     if (value !== undefined) {
-      nextContext[target.name as `%${string}`] = value
+      nextContext[targetHandle as `%${string}`] = value
     }
     else {
-      console.warn(`property ${source.name} does not exist!`)
+      console.warn(`property ${sourceHandle} does not exist!`)
     }
   }
   return nextContext
@@ -467,25 +475,26 @@ async function resolveContextEdges(
 
 /**
  * Resolve slot edges into an asset, merging into an existing base asset.
+ * Exported for unit tests — see note on resolveContextEdges.
  */
-async function resolveDataEdges(
+export async function resolveDataEdges(
   slotEdges: Edge[],
   currentContext: V12Context,
   currentAsset: DictAsset,
   baseAsset: DictAsset,
 ): Promise<DictAsset> {
   const nextAsset: DictAsset = { ...baseAsset }
-  for (const { source, target } of slotEdges) {
-    const value = isContextSlot(source.name)
-      ? currentContext[source.name]
-      : isMetaSlot(source.name)
-        ? currentAsset[source.name]
-        : await resolveNestedValue(currentAsset, source.name)
+  for (const { sourceHandle, targetHandle } of slotEdges) {
+    const value = isContextSlot(sourceHandle)
+      ? currentContext[sourceHandle]
+      : isMetaSlot(sourceHandle)
+        ? currentAsset[sourceHandle]
+        : await resolveNestedValue(currentAsset, sourceHandle)
     if (value !== undefined) {
-      nextAsset[target.name] = value
+      nextAsset[targetHandle] = value
     }
     else {
-      console.warn(`property ${source.name} does not exist!`)
+      console.warn(`property ${sourceHandle} does not exist!`)
     }
   }
   return nextAsset
@@ -494,25 +503,26 @@ async function resolveDataEdges(
 /**
  * Resolve meta edges into an asset dict with ^-prefixed keys.
  * Meta values ride alongside data values in the same dict but are stripped before task input hashing.
+ * Exported for unit tests — see note on resolveContextEdges.
  */
-async function resolveMetaEdges(
+export async function resolveMetaEdges(
   metaEdges: Edge[],
   currentContext: V12Context,
   currentAsset: DictAsset,
   baseAsset: DictAsset,
 ): Promise<DictAsset> {
   const result: DictAsset = { ...baseAsset }
-  for (const { source, target } of metaEdges) {
-    const value = isContextSlot(source.name)
-      ? currentContext[source.name]
-      : isMetaSlot(source.name)
-        ? currentAsset[source.name]
-        : await resolveNestedValue(currentAsset, source.name)
+  for (const { sourceHandle, targetHandle } of metaEdges) {
+    const value = isContextSlot(sourceHandle)
+      ? currentContext[sourceHandle]
+      : isMetaSlot(sourceHandle)
+        ? currentAsset[sourceHandle]
+        : await resolveNestedValue(currentAsset, sourceHandle)
     if (value !== undefined) {
-      result[target.name] = value
+      result[targetHandle] = value
     }
     else {
-      console.warn(`property ${source.name} does not exist!`)
+      console.warn(`property ${sourceHandle} does not exist!`)
     }
   }
   return result

@@ -13,9 +13,9 @@
 import * as dotenv from 'dotenv'
 dotenv.config()
 
+import type { UserActionId } from '@playtiss/core'
 import { homedir } from 'os'
 import path from 'path'
-import { type UserActionId } from 'playtiss/types/playtiss'
 
 import { WorkflowEngine } from './engine/workflow-engine.js'
 
@@ -28,8 +28,8 @@ type PipelineId = UserActionId
 const MONITORED_PIPELINES: PipelineId[] = [
   // "0197a952-d7c6-8fe4-87a8-56aeb0000001" as PipelineId, // Add Three Integer (old)
   // "0197cd70-9951-8971-8fd5-04b75b000001" as PipelineId, // Add Three Numbers (previous)
-  '019d28d5-41ce-8934-8e0a-07efec000001' as PipelineId, // Add Three Numbers
-  '019d28d5-42e1-8205-8ae2-6cf565000001' as PipelineId, // Split Add Two (split/merge test)
+  '019d9f37-9326-8ddf-84ff-9f90e2000001' as PipelineId, // Add Three Numbers
+  '019d9f37-9445-869f-8506-fc95b8000001' as PipelineId, // Split Add Two (split/merge test)
 ]
 
 // Main entry point

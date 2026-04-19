@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import * as dagJSON from '@ipld/dag-json'
+import type { AssetValue, DictAsset } from '@playtiss/core'
 import {
   GraphQLError,
   type GraphQLScalarLiteralParser,
@@ -8,7 +9,6 @@ import {
   print,
 } from 'graphql'
 import type { ValueNode } from 'graphql/language'
-import type { AssetValue, DictAsset } from 'playtiss'
 
 type VariablesType = Parameters<GraphQLScalarLiteralParser<unknown>>[1]
 

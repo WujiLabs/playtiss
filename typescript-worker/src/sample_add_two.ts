@@ -10,13 +10,13 @@
 // Auto-load configuration before importing other modules
 import './config.js'
 
-import type { ActionId, DictAsset } from 'playtiss'
+import type { ActionId, DictAsset } from '@playtiss/core'
 
 import { runWorker } from './index.js'
 import type { RunnerContext } from './runner.js'
 
 // add_two action ID - consistent with integration test seed DB
-export const ACTION_ID_ADD_TWO = '019d28d5-41c9-8c63-807a-f51788000001'
+export const ACTION_ID_ADD_TWO = '019d9f37-9321-85a2-8bcc-23dd72000001'
 
 class ErrorWithOutput extends Error {
   output?: DictAsset

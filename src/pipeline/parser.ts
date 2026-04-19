@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import type { AssetId, TraceId } from '@playtiss/core'
+import { isTraceId } from '@playtiss/core'
+
 import { load } from '../asset-store/index.js'
-import { type AssetId } from '../index.js'
-import { isTraceId, type TraceId } from '../types/trace_id.js'
 import { type Edge, type Node, type Pipeline } from './index.js'
 
 export interface NodeSlotInfo {
@@ -45,8 +46,8 @@ function buildAdjacency(edges: Record<TraceId, Edge>): Adjacency {
   const targetMetaSlotNames = new Map<TargetKey, Set<string>>()
 
   for (const edge of Object.values(edges)) {
-    const targetKey: TargetKey = edge.target.node === null ? 'output' : edge.target.node
-    const sourceId = edge.source.node
+    const targetKey: TargetKey = edge.target === null ? 'output' : edge.target
+    const sourceId = edge.source
 
     // Track distinct sources per target
     if (!incomingSources.has(targetKey)) {
@@ -55,7 +56,7 @@ function buildAdjacency(edges: Record<TraceId, Edge>): Adjacency {
     incomingSources.get(targetKey)!.add(sourceId)
 
     // Classify slot names by prefix
-    const name = edge.target.name
+    const name = edge.targetHandle
     if (name.startsWith('%')) {
       // Context slot — not tracked for merge readiness
     }
@@ -162,12 +163,12 @@ function buildDownstreamMap(
   }
 
   for (const edge of Object.values(edges)) {
-    const sourceNode = edge.source.node
-    const targetNode = edge.target.node
+    const sourceNode = edge.source
+    const targetNode = edge.target
     const key = getGroupKey(sourceNode, targetNode)
     const slotInfo = getOrCreateSlotInfo(key, targetNode)
 
-    const name = edge.target.name
+    const name = edge.targetHandle
     if (name.startsWith('%')) {
       slotInfo.context_edges.push(edge)
     }

@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetValue } from 'playtiss'
+import { type AssetValue, generateTraceId, type TraceId } from '@playtiss/core'
 import { type ConstNode, type Edge, isConstNode, type Node, type Pipeline } from 'playtiss/pipeline'
-import { generateTraceId, type TraceId } from 'playtiss/types/trace_id'
 
 import { parse } from './parser.js'
 import type {
@@ -97,14 +96,10 @@ export async function toExecutable(
       }
 
       const edge: Edge = {
-        source: {
-          node: sourceId,
-          name: dep.outputKey,
-        },
-        target: {
-          node: targetId,
-          name: dep.outputKey, // Use outputKey as parameter name
-        },
+        source: sourceId,
+        sourceHandle: dep.outputKey,
+        target: targetId,
+        targetHandle: dep.outputKey, // Use outputKey as parameter name
       }
 
       const edgeId = generateTraceId()
@@ -172,9 +167,9 @@ export function tryStringify(pipeline: Pipeline): string {
     const dependencies: PFMWikiLink[] = []
     const edges = Object.values(pipeline.edges) as Edge[]
     for (const edge of edges) {
-      const targetNodeId = edge.target.node
+      const targetNodeId = edge.target
       if (targetNodeId && targetNodeId === nodeId) {
-        const sourceNodeId = edge.source.node
+        const sourceNodeId = edge.source
         if (sourceNodeId) {
           const sourceAssetId = sourceNodeId
           const sourceSection = nodeToSection.get(sourceAssetId) || '?'
@@ -184,7 +179,7 @@ export function tryStringify(pipeline: Pipeline): string {
               type: 'wikilink',
               nodeSection: sourceSection,
               nodeName: formatActionName(sourceNode.action),
-              outputKey: edge.source.name,
+              outputKey: edge.sourceHandle,
             })
           }
         }

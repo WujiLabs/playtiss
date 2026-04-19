@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId } from '../../index.js'
-import { type UserActionId, type VersionId } from '../../types/playtiss.js'
+import type { AssetId } from '@playtiss/core'
+
+import type { UserActionId, VersionId } from '../../types/playtiss.js'
 
 // Database implementation cached after first load
 let dbImpl: any = null

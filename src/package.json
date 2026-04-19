@@ -1,6 +1,6 @@
 {
   "name": "playtiss",
-  "version": "1.0.0",
+  "version": "0.5.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,10 +29,6 @@
       "types": "./dist/config.d.ts",
       "import": "./dist/config.js"
     },
-    "./types/json": {
-      "types": "./dist/types/json.d.ts",
-      "import": "./dist/types/json.js"
-    },
     "./pipeline": {
       "types": "./dist/pipeline/index.d.ts",
       "import": "./dist/pipeline/index.js"
@@ -40,18 +36,6 @@
     "./pipeline/parser": {
       "types": "./dist/pipeline/parser.d.ts",
       "import": "./dist/pipeline/parser.js"
-    },
-    "./types/text": {
-      "types": "./dist/types/text.d.ts",
-      "import": "./dist/types/text.js"
-    },
-    "./types/trace_id": {
-      "types": "./dist/types/trace_id.d.ts",
-      "import": "./dist/types/trace_id.js"
-    },
-    "./types/playtiss": {
-      "types": "./dist/types/playtiss.d.ts",
-      "import": "./dist/types/playtiss.js"
     }
   },
   "files": [
@@ -70,6 +54,7 @@
     "@aws-sdk/credential-providers": "catalog:",
     "@aws-sdk/s3-request-presigner": "catalog:",
     "@ipld/dag-json": "catalog:",
+    "@playtiss/core": "workspace:*",
     "@smithy/types": "catalog:",
     "multiformats": "catalog:"
   },

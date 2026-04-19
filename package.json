@@ -7,7 +7,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "packageManager": "pnpm@10.26.2",
   "scripts": {
-    "build": "pnpm --filter playtiss build && pnpm --filter @playtiss/typescript-worker build && pnpm --filter graphql-server --filter pipeline-runner --filter @playtiss/compiler build",
+    "build": "pnpm --filter @playtiss/core build && pnpm --filter playtiss build && pnpm --filter @playtiss/typescript-worker build && pnpm --filter graphql-server --filter pipeline-runner --filter @playtiss/compiler build",
     "clean": "pnpm -r clean",
     "test": "pnpm -r test"
   },

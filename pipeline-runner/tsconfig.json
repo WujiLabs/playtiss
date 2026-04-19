@@ -6,7 +6,7 @@
     "module": "NodeNext",
     "rootDir": "./",
     "moduleResolution": "NodeNext",
-    "types": ["node", "jest"],
+    "types": ["node"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

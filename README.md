@@ -24,13 +24,14 @@ Playtiss uses a decoupled Engine/Worker architecture with:
 
 ### Packages
 
-| Package | Description |
-|---------|-------------|
-| `src/` (playtiss) | Core CAS system, asset management, TraceID generation |
-| `graphql-server/` | Central GraphQL API server (SQLite backend) |
-| `pipeline-runner/` | Workflow execution engine with event-driven scheduling |
-| `typescript-worker/` | TypeScript task execution worker |
-| `playtiss-compiler/` | Workflow definition compiler and validator |
+| Package | License | Description |
+|---------|---------|-------------|
+| `playtiss-core/` (@playtiss/core) | MIT | Collaboration Protocol vocabulary — branded types, CID hashing, Graph primitives, relationship generics. Published to npm. |
+| `src/` (playtiss) | CC BY-NC 4.0 | Reference SDK — asset-store with local/S3/bridge backends, concrete Task/Version/Action, pipeline types. Consumes `@playtiss/core`. |
+| `graphql-server/` | CC BY-NC 4.0 | Central GraphQL API server (SQLite backend) |
+| `pipeline-runner/` | CC BY-NC 4.0 | Workflow execution engine with event-driven scheduling |
+| `typescript-worker/` | CC BY-NC 4.0 | TypeScript task execution worker |
+| `playtiss-compiler/` | CC BY-NC 4.0 | Workflow definition compiler and validator |
 
 ## Getting Started
 
@@ -38,8 +39,8 @@ Playtiss uses a decoupled Engine/Worker architecture with:
 # Install dependencies
 pnpm install
 
-# Build the core package first
-cd src && pnpm build
+# Build all packages in topological order (@playtiss/core, then playtiss SDK, then services)
+pnpm run build
 
 # Start the GraphQL server
 cd graphql-server && pnpm start

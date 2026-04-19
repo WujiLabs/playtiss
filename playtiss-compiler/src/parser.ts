@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { generateTraceId } from 'playtiss/types/trace_id'
+import { generateTraceId } from '@playtiss/core'
 
 import { ParseError } from './errors.js'
 import type {

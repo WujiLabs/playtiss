@@ -14,17 +14,18 @@ import { BatchHttpLink } from '@apollo/client/link/batch-http/index.js'
 import { setContext } from '@apollo/client/link/context/index.js'
 import { onError } from '@apollo/client/link/error/index.js'
 import { RetryLink } from '@apollo/client/link/retry/index.js'
-import http from 'http'
-import https from 'https'
-import { LRUCache } from 'lru-cache'
 import {
   type ActionId,
   type AssetId,
   type AssetValue,
+  computeHash,
   type DictAsset,
   type TraceId,
-} from 'playtiss'
-import { computeHash, store } from 'playtiss/asset-store'
+} from '@playtiss/core'
+import http from 'http'
+import https from 'https'
+import { LRUCache } from 'lru-cache'
+import { store } from 'playtiss/asset-store'
 
 import { graphql } from '../__generated__/index.js'
 import { getLimiter } from '../utils/concurrency-limiter.js'

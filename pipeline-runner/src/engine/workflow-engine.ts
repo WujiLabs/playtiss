@@ -9,10 +9,9 @@
  * - Reacts to events to dispatch dependent subtasks
  */
 
+import type { TraceId, UserActionId } from '@playtiss/core'
 import { homedir } from 'os'
 import { join } from 'path'
-import { type TraceId } from 'playtiss'
-import type { UserActionId } from 'playtiss/types/playtiss'
 
 import { SqliteEventConsumer } from '../event-bus/sqlite-consumer.js'
 import {

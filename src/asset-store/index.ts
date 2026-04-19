@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import * as dagJSON from '@ipld/dag-json'
+import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '@playtiss/core'
+import { cidToAssetId, computeTopBlock } from '@playtiss/core'
 import * as Block from 'multiformats/block'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
 
-import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '../index.js'
-import { cidToAssetId, computeTopBlock } from './compute_hash.js'
 import { fetchBuffer, hasBuffer, saveBuffer } from './storage-factory.js'
 
 function collectCIDLinks(value: unknown): AssetId[] {
@@ -22,9 +22,18 @@ function collectCIDLinks(value: unknown): AssetId[] {
 /**
  * Content-address and persist a single block for the given value.
  *
- * The stored bytes are the fully Merkle-ized encoding (all nested objects/arrays/
- * binaries replaced by CID links), ensuring the CID matches `computeHash(input)`.
- * Sub-values are NOT stored as independent blocks — one I/O per call.
+ * Two concerns, intentionally separated:
+ *
+ * 1. The returned CID is always the Merkle-ized hash (computed via
+ *    `computeHash`) — stable regardless of whether nested sub-values were
+ *    passed inline or as CID links. Two equivalent logical values always
+ *    resolve to the same CID, enabling deduplication.
+ *
+ * 2. The persisted bytes are the INLINE `dag-json` encoding of `input`
+ *    (only top-level CID values are embedded as links; nested objects and
+ *    arrays are NOT recursively split into separate blocks). One I/O per
+ *    call. `load(id)` returns what was written — use `resolve()` to
+ *    materialize any CID links the caller chose to include.
  *
  * `assetReferences` tracks only CID links explicitly present in the original
  * input (i.e. values the caller already stored and linked), not internally-
@@ -36,7 +45,8 @@ export async function store(input: AssetValue): Promise<AssetId> {
   const { cid } = await computeTopBlock(input)
   const id = cidToAssetId(cid)
   if (!(await hasBuffer(id))) {
-    // Store the original value as-is (not Merkle-ized), so load() returns the full object
+    // Intentionally store the inline encoding (not Merkle-ized), so load()
+    // returns the object as-written and no sub-blocks need additional I/O.
     const bytes = input instanceof Uint8Array
       ? Block.encode({ value: input, codec: raw, hasher: sha256 }).then(b => b.bytes)
       : Promise.resolve(dagJSON.encode(input))
@@ -77,10 +87,9 @@ export async function fromLink<T extends DictAsset>(v: ValueOrLink<T>): Promise<
 }
 
 // ===================================================================
-// WEB ENVIRONMENT API
+// RE-EXPORTS
 // ===================================================================
 
-export { cidToAssetId, computeHash } from './compute_hash.js'
 export type { AwsCredentials, BridgeConfig, S3Config } from './config.js'
 export {
   resetStorageProvider,
@@ -89,3 +98,4 @@ export {
   setLocalWebStorageProvider,
   setS3WebStorageProvider,
 } from './storage-factory.js'
+export { cidToAssetId, computeHash } from '@playtiss/core'

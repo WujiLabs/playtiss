@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
+// SPDX-License-Identifier: MIT
 import * as dagJSON from '@ipld/dag-json'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'

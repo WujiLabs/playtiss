@@ -5,7 +5,7 @@
  * Implements forward pagination for discovering and monitoring runnable tasks.
  * Uses server-side SQL filtering with cursor-based Relay pagination.
  */
-import type { ActionId, TraceId } from 'playtiss'
+import type { ActionId, TraceId } from '@playtiss/core'
 
 import { GraphQLClient } from './graphql-client.js'
 

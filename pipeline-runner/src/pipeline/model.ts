@@ -8,15 +8,15 @@
  * - Atomic merge operations → SQLite transactions
  */
 
-import { LRUCache } from 'lru-cache'
 import {
   type AssetId,
   type AssetValue,
   type DictAsset,
+  encodeToString,
   type TraceId,
-} from 'playtiss'
+} from '@playtiss/core'
+import { LRUCache } from 'lru-cache'
 import { load, store } from 'playtiss/asset-store'
-import { encodeToString } from 'playtiss/types/json'
 
 import { PipelineGraphQLClient } from '../graphql/pipeline.js'
 // ================================================================

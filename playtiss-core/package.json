@@ -1,0 +1,97 @@
+{
+  "name": "@playtiss/core",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "description": "Vocabulary of the Playtiss Collaboration Protocol — content-addressed DAG primitives for human+AI workflows",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WujiLabs/playtiss.git",
+    "directory": "playtiss-core"
+  },
+  "homepage": "https://github.com/WujiLabs/playtiss/tree/master/playtiss-core",
+  "keywords": [
+    "playtiss",
+    "workflow",
+    "dag",
+    "ipld",
+    "content-addressable",
+    "collaboration-protocol"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./graph": {
+      "types": "./dist/graph.d.ts",
+      "import": "./dist/graph.js"
+    },
+    "./task": {
+      "types": "./dist/task.d.ts",
+      "import": "./dist/task.js"
+    },
+    "./trace-id": {
+      "types": "./dist/trace-id.d.ts",
+      "import": "./dist/trace-id.js"
+    },
+    "./asset-id": {
+      "types": "./dist/asset-id.d.ts",
+      "import": "./dist/asset-id.js"
+    },
+    "./asset-value": {
+      "types": "./dist/asset-value.d.ts",
+      "import": "./dist/asset-value.js"
+    },
+    "./json": {
+      "types": "./dist/json.d.ts",
+      "import": "./dist/json.js"
+    },
+    "./hash": {
+      "types": "./dist/hash.d.ts",
+      "import": "./dist/hash.js"
+    },
+    "./asset-store": {
+      "types": "./dist/asset-store/index.d.ts",
+      "import": "./dist/asset-store/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "prebuild": "npm run clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@ipld/dag-json": "catalog:",
+    "multiformats": "catalog:"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@ipld/dag-cbor": "^9.2.5",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "catalog:",
+    "globals": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

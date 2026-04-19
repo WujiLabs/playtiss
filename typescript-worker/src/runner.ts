@@ -5,8 +5,8 @@
  * Handles task claiming, execution, and result reporting using p-limit
  * for concurrency control and a Set for deduplication tracking.
  */
+import type { ActionId, AssetId, DictAsset, TraceId } from '@playtiss/core'
 import pLimit from 'p-limit'
-import type { ActionId, AssetId, DictAsset, TraceId } from 'playtiss'
 import { load, store } from 'playtiss/asset-store'
 
 import { GraphQLClient } from './graphql-client.js'

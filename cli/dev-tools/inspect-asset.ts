@@ -13,7 +13,7 @@ import dotenv from 'dotenv'
 // Load environment configuration BEFORE any playtiss imports
 dotenv.config()
 
-import { isAssetId } from 'playtiss'
+import { isAssetId } from '@playtiss/core'
 import { load } from 'playtiss/asset-store'
 
 async function inspectAsset(assetId: string) {

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import type { AssetId, AssetValue } from '@playtiss/core'
 import { LRUCache } from 'lru-cache'
-import { type AssetId, type AssetValue } from 'playtiss'
 import { load } from 'playtiss/asset-store'
 
 import { getLimiter } from './concurrency-limiter.js'

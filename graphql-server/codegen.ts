@@ -10,12 +10,12 @@ const config: CodegenConfig = {
         allowEnumStringTypes: true,
         useTypeImports: true, // Enable type-only imports
         scalars: {
-          ActionId: "playtiss#ActionId",
-          AssetId: "playtiss#AssetId",
-          SystemActionId: "playtiss#SystemActionId",
-          TraceId: "playtiss#TraceId",
+          ActionId: "@playtiss/core#ActionId",
+          AssetId: "@playtiss/core#AssetId",
+          SystemActionId: "@playtiss/core#SystemActionId",
+          TraceId: "@playtiss/core#TraceId",
           Date: "number",
-          DictJSONAsset: "playtiss#DictAsset",
+          DictJSONAsset: "@playtiss/core#DictAsset",
         },
       },
     },

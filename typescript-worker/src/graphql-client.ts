@@ -9,7 +9,7 @@
  * Uses generated types from GraphQL codegen.
  */
 import { ApolloClient, createHttpLink, InMemoryCache } from '@apollo/client/index.js'
-import type { ActionId, AssetId, TraceId } from 'playtiss'
+import type { ActionId, AssetId, TraceId } from '@playtiss/core'
 
 import type { VersionType } from './__generated__/graphql.js'
 import { graphql } from './__generated__/index.js'

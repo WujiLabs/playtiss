@@ -40,7 +40,7 @@ async function waitForServer(timeoutMs = 60000) {
 }
 
 // Import generateTraceId for node/edge keys
-const { generateTraceId } = await import('../src/dist/types/trace_id.js')
+const { generateTraceId } = await import('../playtiss-core/dist/trace-id.js')
 
 // Setup — write directly to the output path to avoid WAL copy issues
 const outputDb = join(PROJECT_ROOT, 'graphql-server', 'playtiss-test-add3.db')
@@ -105,13 +105,13 @@ try {
   console.log(`  node1 (add A+B) ID: ${node1Id}`)
   console.log(`  node2 (add result+C) ID: ${node2Id}`)
 
-  // Create Edge objects with TraceId keys
+  // Create Edge objects with TraceId keys (flat ReactFlow-style shape, v0.5.0+)
   const edges = [
-    { source: { node: null, name: 'A' }, target: { node: node1Id, name: 'A' } },
-    { source: { node: null, name: 'B' }, target: { node: node1Id, name: 'B' } },
-    { source: { node: node1Id, name: 'output' }, target: { node: node2Id, name: 'A' } },
-    { source: { node: null, name: 'C' }, target: { node: node2Id, name: 'B' } },
-    { source: { node: node2Id, name: 'output' }, target: { node: null, name: 'result' } },
+    { source: null, sourceHandle: 'A', target: node1Id, targetHandle: 'A' },
+    { source: null, sourceHandle: 'B', target: node1Id, targetHandle: 'B' },
+    { source: node1Id, sourceHandle: 'output', target: node2Id, targetHandle: 'A' },
+    { source: null, sourceHandle: 'C', target: node2Id, targetHandle: 'B' },
+    { source: node2Id, sourceHandle: 'output', target: null, targetHandle: 'result' },
   ]
   const edgeEntries = {}
   for (const edge of edges) {
@@ -179,23 +179,23 @@ try {
   console.log(`  add_two node ID: ${addTwoNodeId}`)
   console.log(`  merge node ID: ${mergeNodeId}`)
 
-  // Create 9 edges for the split-merge workflow
+  // Create 9 edges for the split-merge workflow (flat ReactFlow-style shape, v0.5.0+)
   const smEdges = [
     // Pipeline input → split
-    { source: { node: null, name: 'items' }, target: { node: splitNodeId, name: 'input' } },
+    { source: null, sourceHandle: 'items', target: splitNodeId, targetHandle: 'input' },
     // Split → add_two: tag edges for context propagation
-    { source: { node: splitNodeId, name: 'keys' }, target: { node: addTwoNodeId, name: '%keys' } },
-    { source: { node: splitNodeId, name: 'key' }, target: { node: addTwoNodeId, name: '%key' } },
+    { source: splitNodeId, sourceHandle: 'keys', target: addTwoNodeId, targetHandle: '%keys' },
+    { source: splitNodeId, sourceHandle: 'key', target: addTwoNodeId, targetHandle: '%key' },
     // Split → add_two: data edges (dot-path accessors)
-    { source: { node: splitNodeId, name: 'item.A' }, target: { node: addTwoNodeId, name: 'A' } },
-    { source: { node: splitNodeId, name: 'item.B' }, target: { node: addTwoNodeId, name: 'B' } },
+    { source: splitNodeId, sourceHandle: 'item.A', target: addTwoNodeId, targetHandle: 'A' },
+    { source: splitNodeId, sourceHandle: 'item.B', target: addTwoNodeId, targetHandle: 'B' },
     // add_two → merge: tag edges propagate context back as regular slots
-    { source: { node: addTwoNodeId, name: '%keys' }, target: { node: mergeNodeId, name: 'keys' } },
-    { source: { node: addTwoNodeId, name: '%key' }, target: { node: mergeNodeId, name: 'key' } },
+    { source: addTwoNodeId, sourceHandle: '%keys', target: mergeNodeId, targetHandle: 'keys' },
+    { source: addTwoNodeId, sourceHandle: '%key', target: mergeNodeId, targetHandle: 'key' },
     // add_two → merge: data edge
-    { source: { node: addTwoNodeId, name: 'output' }, target: { node: mergeNodeId, name: 'item' } },
+    { source: addTwoNodeId, sourceHandle: 'output', target: mergeNodeId, targetHandle: 'item' },
     // Merge → pipeline output
-    { source: { node: mergeNodeId, name: 'output' }, target: { node: null, name: 'result' } },
+    { source: mergeNodeId, sourceHandle: 'output', target: null, targetHandle: 'result' },
   ]
 
   const smEdgeEntries = {}

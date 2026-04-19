@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import type { AssetId } from '@playtiss/core'
 import type { Database as DatabaseType } from 'better-sqlite3'
 import Database from 'better-sqlite3'
 import { existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import path from 'path'
 
-import { type AssetId } from '../../index.js'
-import { type UserActionId, type VersionId } from '../../types/playtiss.js'
+import type { UserActionId, VersionId } from '../../types/playtiss.js'
 
 // Database connection management
 // Note: better-sqlite3 dependency is guaranteed to exist when this file is loaded

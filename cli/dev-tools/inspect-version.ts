@@ -13,11 +13,11 @@ import dotenv from 'dotenv'
 // Load environment configuration from local .env file
 dotenv.config()
 
+import { isAssetId } from '@playtiss/core'
 import Database from 'better-sqlite3'
 import fs from 'fs'
 import { homedir } from 'os'
 import path from 'path'
-import { isAssetId } from 'playtiss'
 import { load } from 'playtiss/asset-store'
 
 // Helper function to get default DB path in ~/.playtiss

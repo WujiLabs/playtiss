@@ -1,16 +1,14 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId, isAssetId } from '../index.js'
+import { type AssetId, isAssetId, type StorageProvider } from '@playtiss/core'
+
 import { BridgeStorageProvider } from './bridge/provider.js'
 import { type BridgeConfig, getConfig, type S3Config, type StorageConfig } from './config.js'
 import { LocalStorageProvider } from './local/index.js'
 import { S3StorageProvider } from './s3/index.js'
-import {
-  type AssetReferences,
-  type StorageProvider,
-} from './storage-provider.js'
+import type { PlaytissAssetReferences } from './storage-references.js'
 
-// Re-export for backward compatibility
-export type { AssetReferences, StorageProvider } from './storage-provider.js'
+export type { PlaytissAssetReferences } from './storage-references.js'
+export type { StorageProvider } from '@playtiss/core'
 
 let currentProvider: StorageProvider | null = null
 
@@ -124,7 +122,7 @@ export async function fetchBuffer(id: AssetId): Promise<Uint8Array> {
 export async function saveBuffer(
   buffer: Uint8Array,
   id: AssetId,
-  references?: AssetReferences,
+  references?: PlaytissAssetReferences,
 ): Promise<void> {
   if (!isAssetId(id)) {
     throw new Error('Invalid asset ID')

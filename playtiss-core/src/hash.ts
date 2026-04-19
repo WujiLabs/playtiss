@@ -1,11 +1,13 @@
 // Copyright (c) 2026 Wuji Labs Inc
+// SPDX-License-Identifier: MIT
 import * as dagJSON from '@ipld/dag-json'
 import * as Block from 'multiformats/block'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
 import { sha256 } from 'multiformats/hashes/sha2'
 
-import type { AssetId, AssetValue } from '../index.js'
+import type { AssetId } from './asset-id.js'
+import type { AssetValue } from './asset-value.js'
 
 // Safe cast: we know the CID was created with dag-json/sha256 or raw/sha256
 export function cidToAssetId(cid: CID): AssetId {
@@ -78,6 +80,10 @@ export async function computeTopBlock(input: AssetValue): Promise<{
  * Uses full Merkle-ization: nested objects, arrays, and binary buffers are
  * recursively hashed as separate blocks. The returned CID depends on the
  * logical content, not on whether sub-values were provided inline or as CID links.
+ *
+ * Canonical ordering is guaranteed by the dag-json spec: object keys are
+ * sorted by UTF-8 byte comparison during encoding, so insertion order does
+ * not affect the hash.
  *
  * Pure function — no storage side effects.
  */

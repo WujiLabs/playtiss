@@ -26,6 +26,7 @@
     "commander": "^12.1.0",
     "dotenv": "catalog:",
     "graphql": "catalog:",
+    "@playtiss/core": "workspace:*",
     "playtiss": "workspace:*",
     "react": "catalog:",
     "better-sqlite3": "catalog:"

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import type { SystemActionId, UserActionId } from '@playtiss/core'
 import type { BuiltinAction, Edge, Node, Pipeline } from 'playtiss/pipeline'
-import type { SystemActionId, UserActionId } from 'playtiss/types/playtiss'
 
 /**
  * Section number in hierarchical format

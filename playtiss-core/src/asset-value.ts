@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Wuji Labs Inc
+// SPDX-License-Identifier: MIT
 import * as dagJSON from '@ipld/dag-json'
 import { CID } from 'multiformats/cid'
 import * as raw from 'multiformats/codecs/raw'
@@ -11,7 +12,7 @@ export { CID }
 type DagJsonCode = typeof dagJSON.code // 297
 type RawCode = typeof raw.code // 85
 
-// Replaces LazyAsset — the native IPLD dag-json value type.
+// The native IPLD dag-json value type.
 // Primitives, objects, arrays, binary (Uint8Array), and CID links are all valid.
 // When dag-json encodes this:
 //   Uint8Array → {"/": {"bytes": "base64pad..."}}
@@ -26,7 +27,8 @@ export type AssetValue
     | Uint8Array
     | CID
 
-// Replaces DictLazyAsset — a plain object whose values are AssetValues.
+// A plain object whose values are AssetValues. The structural base of any
+// content-addressable record in the Collaboration Protocol.
 export type DictAsset = { [key: string]: AssetValue }
 
 // Playtiss link types: always CIDv1 + sha256

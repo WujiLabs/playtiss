@@ -1,15 +1,12 @@
 // Copyright (c) 2026 Wuji Labs Inc
+import { type AssetId, isAssetId, type StorageProvider } from '@playtiss/core'
 import fs_sync from 'fs'
 import fs from 'fs/promises'
 import { homedir } from 'os'
 import path from 'path'
 
-import { type AssetId, isAssetId } from '../../index.js'
 import { getConfig, type StorageConfig } from '../config.js'
-import {
-  type AssetReferences,
-  type StorageProvider,
-} from '../storage-provider.js'
+import type { PlaytissAssetReferences } from '../storage-references.js'
 import {
   saveAssetRecord,
   saveAssetReferences,
@@ -70,7 +67,7 @@ export class LocalStorageProvider implements StorageProvider {
   async saveBuffer(
     buffer: Uint8Array,
     id: AssetId,
-    references?: AssetReferences,
+    references?: PlaytissAssetReferences,
   ): Promise<void> {
     this.assertValidId(id)
     try {
@@ -137,7 +134,7 @@ export class LocalStorageProvider implements StorageProvider {
   /** Persist the three reference flavours in parallel when present. */
   private async persistReferences(
     id: AssetId,
-    refs: AssetReferences,
+    refs: PlaytissAssetReferences,
   ): Promise<void> {
     const tasks: Promise<void>[] = []
 

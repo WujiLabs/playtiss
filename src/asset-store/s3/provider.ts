@@ -5,16 +5,13 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import type { AssetId, StorageProvider } from '@playtiss/core'
 import { type StreamingBlobPayloadInputTypes } from '@smithy/types'
 import { CID } from 'multiformats/cid'
 
 import { config as awsConfig } from '../../config.js'
-import { type AssetId } from '../../index.js'
 import { type StorageConfig } from '../config.js'
-import {
-  type AssetReferences,
-  type StorageProvider,
-} from '../storage-provider.js'
+import type { PlaytissAssetReferences } from '../storage-references.js'
 import {
   saveAssetReferences as saveS3AssetReferences,
   saveAssetToActionReferences as saveS3AssetToActionReferences,
@@ -81,7 +78,7 @@ export class S3StorageProvider implements StorageProvider {
   async saveBuffer(
     buffer: Uint8Array,
     id: AssetId,
-    references?: AssetReferences,
+    references?: PlaytissAssetReferences,
   ): Promise<void> {
     this.ensureReady()
     try {
@@ -201,7 +198,7 @@ export class S3StorageProvider implements StorageProvider {
   /** Persist the three reference flavours in parallel when present. */
   private async persistReferences(
     id: AssetId,
-    refs: AssetReferences,
+    refs: PlaytissAssetReferences,
   ): Promise<void> {
     const tasks: Promise<void>[] = []
 

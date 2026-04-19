@@ -19,7 +19,7 @@ dotenv.config()
 import { store } from 'playtiss/asset-store'
 
 // add_two action ID - consistent with integration test seed DB
-const ADD_ACTION_ID = '019d048e-d525-89ca-8fed-1f12e6000001'
+const ADD_ACTION_ID = '019d9f37-9321-85a2-8bcc-23dd72000001'
 
 async function submitAddTask(a: number, b: number) {
   try {

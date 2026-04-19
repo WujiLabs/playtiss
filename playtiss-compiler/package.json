@@ -12,8 +12,8 @@
     }
   },
   "scripts": {
-    "build": "pnpm run clean && tsc",
-    "clean": "rm -rf dist && rm -f tsconfig.tsbuildinfo",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist && rm -f tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
@@ -29,6 +29,7 @@
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
+    "@playtiss/core": "workspace:*",
     "playtiss": "workspace:*"
   },
   "devDependencies": {

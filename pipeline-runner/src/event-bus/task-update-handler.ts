@@ -22,9 +22,8 @@
  * - Reduces event processing overhead significantly
  */
 
-import type { AssetId, TraceId } from 'playtiss'
+import type { AssetId, TraceId, UserActionId } from '@playtiss/core'
 import type { Pipeline } from 'playtiss/pipeline'
-import type { UserActionId } from 'playtiss/types/playtiss'
 
 import type { PipelineGraphQLClient } from '../graphql/pipeline.js'
 import type { Task, workflowRevisionNodeState } from '../graphql/types.js'
@@ -256,7 +255,7 @@ export async function handleTaskFailedEvent(
     }
 
     // Step 2: Load error output if available (orchestrator line 556-564)
-    let errorOutput: import('playtiss').AssetValue = {} // Default empty error
+    let errorOutput: import('@playtiss/core').AssetValue = {} // Default empty error
     if (task.currentVersion) {
       if (task.currentVersion.type !== 'ERROR') {
         console.warn(
@@ -596,7 +595,7 @@ async function processStaleNode(
 
     taskId = await graphqlClient.createTask(
       nodeDefinition.action as UserActionId,
-      inputs as import('playtiss').DictAsset,
+      inputs as import('@playtiss/core').DictAsset,
     )
 
     console.log(`📋 Task created/found: ${taskId}`)

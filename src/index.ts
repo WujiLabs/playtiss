@@ -1,40 +1,34 @@
 // Copyright (c) 2026 Wuji Labs Inc
+//
+// playtiss SDK — the reference Collaboration Protocol implementation.
+//
+// Core vocabulary (TraceId, AssetId, AssetValue, DictAsset, CID, computeHash,
+// Graph, TaskLike/VersionLike/ActionLike, StorageProvider, etc.) lives in
+// @playtiss/core (MIT). Import directly from there:
+//
+//   import type { AssetId, TraceId, DictAsset } from '@playtiss/core'
+//   import { computeHash } from '@playtiss/core'
+//
+// This barrel exports ONLY the SDK-specific concrete data model (Task,
+// Version, Action, VersionType, SYSTEM_ACTIONS registry).
+
 export {
-  type AssetId,
-  isAssetId,
-} from './types/asset_id.js'
-export {
-  type AssetValue,
-  CID,
-  type DagJsonLink,
-  type DictAsset,
-  isLink,
-  type PlaytissLink,
-  type RawLink,
-} from './types/asset_value.js'
-export type {
-  ValueOrLink,
-} from './types/playtiss.js'
-export {
-  type ActionId,
   actionIdToDbFormat,
   dbFormatToActionId,
   default_scope_id,
   getSystemAction,
   getSystemActionDefinitions,
-  isSystemAction,
   SYSTEM_ACTIONS,
   type SystemAction,
-  type SystemActionId,
+} from './system-actions.js'
+export type {
+  Action,
+  ErrorVersion,
+  ImplementationVersion,
+  OutputVersion,
+  SnapshotVersion,
+  Task,
+  Version,
+  VersionType,
+  WorkflowDefinitionVersion,
 } from './types/playtiss.js'
-export {
-  generateTraceId,
-  parseTraceId,
-  type TraceId,
-  type TraceIdGenerator,
-} from './types/trace_id.js'
-
-// provide timestamp
-export function getTime() {
-  return Date.now()
-}

@@ -1,10 +1,8 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import { type AssetId } from '../../index.js'
+import type { AssetId, StorageProvider } from '@playtiss/core'
+
 import { type StorageConfig } from '../config.js'
-import {
-  type AssetReferences,
-  type StorageProvider,
-} from '../storage-provider.js'
+import type { PlaytissAssetReferences } from '../storage-references.js'
 
 export class BridgeStorageProvider implements StorageProvider {
   private readonly baseUrl: string
@@ -64,7 +62,7 @@ export class BridgeStorageProvider implements StorageProvider {
   async saveBuffer(
     buffer: Uint8Array,
     id: AssetId,
-    references?: AssetReferences,
+    references?: PlaytissAssetReferences,
   ): Promise<void> {
     try {
       // For large files (>10MB), use chunked upload to avoid UXP WebSocket limits
@@ -94,7 +92,7 @@ export class BridgeStorageProvider implements StorageProvider {
   private async saveBufferDirect(
     buffer: Uint8Array,
     id: AssetId,
-    references?: AssetReferences,
+    references?: PlaytissAssetReferences,
   ): Promise<void> {
     const formData = new FormData()
 
@@ -127,7 +125,7 @@ export class BridgeStorageProvider implements StorageProvider {
   private async saveBufferChunked(
     buffer: Uint8Array,
     id: AssetId,
-    references?: AssetReferences,
+    references?: PlaytissAssetReferences,
   ): Promise<void> {
     const CHUNK_SIZE = 10 * 1024 * 1024 // 10MB chunks
     const totalChunks = Math.ceil(buffer.length / CHUNK_SIZE)
