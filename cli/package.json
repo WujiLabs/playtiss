@@ -20,29 +20,29 @@
     "list": "tsx dev-tools/list-entities.ts"
   },
   "dependencies": {
-    "@apollo/client": "^3.11.10",
+    "@apollo/client": "catalog:",
     "@graphql-typed-document-node/core": "catalog:",
-    "chalk": "^5.3.0",
+    "@playtiss/core": "workspace:*",
+    "better-sqlite3": "catalog:",
+    "chalk": "^5.6.2",
     "commander": "^12.1.0",
     "dotenv": "catalog:",
     "graphql": "catalog:",
-    "@playtiss/core": "workspace:*",
     "playtiss": "workspace:*",
-    "react": "catalog:",
-    "better-sqlite3": "catalog:"
+    "react": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@graphql-codegen/cli": "^5.0.2",
-    "@graphql-codegen/client-preset": "^4.2.5",
+    "@graphql-codegen/cli": "catalog:",
+    "@graphql-codegen/client-preset": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
-    "@types/node": "catalog:",
-    "@types/react": "^19.2.3",
     "@types/better-sqlite3": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.14",
     "globals": "catalog:",
-    "tsx": "^4.7.0",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "^1.6.1"
+    "vitest": "catalog:"
   }
 }

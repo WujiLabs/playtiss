@@ -1,0 +1,68 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Run daily at 06:00 UTC so new CVEs surface even without code changes
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fail the build on any HIGH or CRITICAL advisory.
+      # Moderate and low are reported but non-blocking — dependabot will PR patches for them.
+      - name: Run pnpm audit (fail on high/critical)
+        run: pnpm audit --audit-level=high
+
+      - name: Run pnpm audit (report all, non-blocking)
+        if: always()
+        run: pnpm audit || true
+
+  outdated:
+    name: pnpm outdated (report only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Report outdated packages
+        run: pnpm -r outdated || true

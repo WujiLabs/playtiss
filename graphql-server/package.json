@@ -24,19 +24,19 @@
     "@as-integrations/aws-lambda": "catalog:",
     "@as-integrations/express5": "catalog:",
     "@ipld/dag-json": "catalog:",
+    "@playtiss/core": "workspace:*",
+    "better-sqlite3": "catalog:",
     "cors": "catalog:",
     "dotenv": "catalog:",
     "express": "catalog:",
     "graphql": "catalog:",
     "graphql-scalars": "catalog:",
     "multiformats": "catalog:",
-    "@playtiss/core": "workspace:*",
-    "playtiss": "workspace:*",
-    "better-sqlite3": "catalog:"
+    "playtiss": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@graphql-codegen/cli": "6.1.0",
+    "@graphql-codegen/cli": "catalog:",
     "@graphql-codegen/typescript": "catalog:",
     "@graphql-codegen/typescript-resolvers": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
@@ -45,15 +45,13 @@
     "@types/cors": "catalog:",
     "@types/express": "catalog:",
     "@types/node": "catalog:",
-    "@vitest/coverage-v8": "^4.0.15",
-    "esbuild": "^0.20.2",
+    "@vitest/coverage-v8": "catalog:",
+    "esbuild": "^0.28.0",
     "eslint": "catalog:",
     "globals": "catalog:",
-    "serverless": "catalog:",
-    "serverless-esbuild": "catalog:",
     "ts-node": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "^4.0.15"
+    "vitest": "catalog:"
   }
 }

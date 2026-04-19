@@ -17,25 +17,25 @@
     "clean": "rm -rf dist src/__generated__"
   },
   "dependencies": {
-    "@apollo/client": "^3.8.0",
+    "@apollo/client": "catalog:",
+    "@playtiss/core": "workspace:*",
     "dotenv": "catalog:",
     "graphql": "catalog:",
     "p-limit": "catalog:",
-    "@playtiss/core": "workspace:*",
     "playtiss": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@graphql-codegen/cli": "^5.0.0",
-    "@graphql-codegen/client-preset": "^4.1.0",
+    "@graphql-codegen/cli": "catalog:",
+    "@graphql-codegen/client-preset": "catalog:",
     "@graphql-typed-document-node/core": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
     "@types/node": "catalog:",
     "globals": "catalog:",
-    "tsx": "^3.14.0",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "^0.34.0"
+    "vitest": "catalog:"
   },
   "keywords": [
     "playtiss",

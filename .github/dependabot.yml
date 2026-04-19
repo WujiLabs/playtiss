@@ -1,0 +1,55 @@
+version: 2
+# Dependabot keeps dependencies current and surfaces security advisories as PRs.
+# See https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+updates:
+  # npm / pnpm workspace (root manages the monorepo's lockfile)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    # Group non-security minor+patch bumps together to reduce PR noise.
+    # Security PRs always open individually regardless of grouping.
+    groups:
+      dev-deps:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      prod-deps:
+        dependency-type: "production"
+        update-types:
+          - "patch"
+      typescript-eslint:
+        patterns:
+          - "@typescript-eslint/*"
+          - "typescript-eslint"
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+      graphql-codegen:
+        patterns:
+          - "@graphql-codegen/*"
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+    # Ignore pre-release channels — we manage those manually via catalog.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # GitHub Actions pinning
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "ci"
