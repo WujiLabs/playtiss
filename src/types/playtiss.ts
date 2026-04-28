@@ -7,29 +7,37 @@
 // what fields a concrete Action carries. Third-party Collaboration Protocol
 // tools are free to define their own concrete types that satisfy the same
 // generics; this file is the Playtiss reference implementation.
+//
+// Naming note (Apr 2026): @playtiss/core has been aligned to the Collaboration
+// Protocol vocabulary (RevisionLike, RevisionId, ActorId). This SDK still uses
+// the historical concrete type names (Version, OutputVersion, etc.) and the
+// historical field names (executed_def_version_id, scope_id, version_type_tag,
+// current_version_id, parent_version_id) because they are the wire format
+// graphql-server's GraphQL schema exposes. Both renames will land together in
+// v1.1 alongside the graphql-server schema rename.
 
 import type {
   ActionId,
+  ActorId,
   AssetValue,
   DefaultTask,
   DictAsset,
-  ScopeId,
+  RevisionId,
+  RevisionLike,
   TaskId,
   TaskLike,
   ValueOrLink,
-  VersionId,
-  VersionLike,
 } from '@playtiss/core'
 
 export type {
   ActionId,
+  ActorId,
   NamespacedActionId,
-  ScopeId,
+  RevisionId,
   SystemActionId,
   TaskId,
   UserActionId,
   ValueOrLink,
-  VersionId,
 } from '@playtiss/core'
 export { isSystemAction } from '@playtiss/core'
 
@@ -51,7 +59,7 @@ export type VersionType
     | 'implementation'
     | 'snapshot'
 
-type VersionBase = VersionLike<VersionId, TaskId, ValueOrLink<DictAsset>> & {
+type VersionBase = RevisionLike<RevisionId, TaskId, ValueOrLink<DictAsset>> & {
   version_type_tag: VersionType
   tags: string[]
   commit_message: string
@@ -82,14 +90,14 @@ export type WorkflowDefinitionVersion = VersionBase & {
 export type ImplementationVersion = VersionBase & {
   version_type_tag: 'implementation'
   asset: null
-  executed_def_version_id: VersionId
+  executed_def_version_id: RevisionId
 }
 
 /** Represents a snapshot of a graph execution's state (used for fork/replay) */
 export type SnapshotVersion = VersionBase & {
   version_type_tag: 'snapshot'
   asset: null
-  executed_def_version_id: VersionId
+  executed_def_version_id: RevisionId
 }
 
 export type Version
@@ -108,7 +116,7 @@ export type Version
  * and extends it with scope, naming, description, parameters, and timestamp.
  */
 export type Task = DefaultTask & {
-  scope_id: ScopeId
+  scope_id: ActorId
   parameters: ValueOrLink<DictAsset>
   name: string
   description: string
@@ -125,7 +133,7 @@ export type Task = DefaultTask & {
  */
 export type Action = Task & {
   id: ActionId
-  scope_id: ScopeId
+  scope_id: ActorId
   name: string
   description: string
   input_schema: AssetValue
@@ -138,8 +146,8 @@ export type Action = Task & {
 // ----------------------------------------------------------------------------
 
 // Unused but load-bearing: breaks the build if conformance drifts.
-type _assertTaskConforms = Task extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> ? true : never
-type _assertVersionConforms = Version extends VersionLike<VersionId, TaskId, ValueOrLink<DictAsset>> ? true : never
-type _assertActionConforms = Action extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> ? true : never
+type _assertTaskConforms = Task extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> ? true : never
+type _assertVersionConforms = Version extends RevisionLike<RevisionId, TaskId, ValueOrLink<DictAsset>> ? true : never
+type _assertActionConforms = Action extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> ? true : never
 
 type _conformanceWitnesses = [_assertTaskConforms, _assertVersionConforms, _assertActionConforms]

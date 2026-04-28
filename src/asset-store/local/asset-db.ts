@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import type { AssetId } from '@playtiss/core'
 
-import type { UserActionId, VersionId } from '../../types/playtiss.js'
+import type { UserActionId, RevisionId } from '../../types/playtiss.js'
 
 // Database implementation cached after first load
 let dbImpl: any = null
@@ -98,7 +98,7 @@ export async function saveAssetToActionReferences(
 
 export async function saveAssetToVersionReferences(
   parentAssetId: AssetId,
-  versionIds: VersionId[],
+  versionIds: RevisionId[],
 ): Promise<void> {
   const impl = await getDbImpl()
   return impl.saveAssetToVersionReferences(parentAssetId, versionIds)

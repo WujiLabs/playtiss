@@ -6,7 +6,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import path from 'path'
 
-import type { UserActionId, VersionId } from '../../types/playtiss.js'
+import type { UserActionId, RevisionId } from '../../types/playtiss.js'
 
 // Database connection management
 // Note: better-sqlite3 dependency is guaranteed to exist when this file is loaded
@@ -137,7 +137,7 @@ export async function saveAssetToActionReferences(
 // This function should be called when storing Context assets that reference versions
 export async function saveAssetToVersionReferences(
   _parentAssetId: AssetId,
-  _versionIds: VersionId[],
+  _versionIds: RevisionId[],
 ): Promise<void> {
   // TODO: Implement this function to populate AssetToVersionReferences table
   // when Context assets are stored that reference version IDs

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wuji Labs Inc
 import type { AssetReferences } from '@playtiss/core'
 
-import type { UserActionId, VersionId } from '../types/playtiss.js'
+import type { UserActionId, RevisionId } from '../types/playtiss.js'
 
 /**
  * playtiss SDK-widened asset-reference tracking.
@@ -9,7 +9,7 @@ import type { UserActionId, VersionId } from '../types/playtiss.js'
  * Extends the generic `AssetReferences` from `@playtiss/core` (which tracks
  * only blob-level `assetReferences: AssetId[]`) with playtiss-specific
  * categories: `actionReferences` (to UserActionIds) and `versionReferences`
- * (to VersionIds). The SDK uses these for GC and dependency tracking on top
+ * (to RevisionIds). The SDK uses these for GC and dependency tracking on top
  * of core's generic blob-level reference set.
  *
  * The rename from `AssetReferences` to `PlaytissAssetReferences` avoids a
@@ -22,5 +22,5 @@ export interface PlaytissAssetReferences extends AssetReferences {
   // Asset → Action references (for workflow definition assets referencing user actions)
   actionReferences?: UserActionId[]
   // Asset → Version references (for context assets referencing versions)
-  versionReferences?: VersionId[]
+  versionReferences?: RevisionId[]
 }

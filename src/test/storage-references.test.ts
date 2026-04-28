@@ -4,7 +4,7 @@ import type { AssetId, AssetReferences as CoreAssetReferences } from '@playtiss/
 import { describe, expect, it } from 'vitest'
 
 import type { PlaytissAssetReferences } from '../asset-store/storage-references.js'
-import type { UserActionId, VersionId } from '../types/playtiss.js'
+import type { UserActionId, RevisionId } from '../types/playtiss.js'
 
 // ------------------------------------------------------------------
 // Compile-time conformance: PlaytissAssetReferences extends the core shape
@@ -19,7 +19,7 @@ type _keepsAssetReferencesField
 type _hasActionReferences
   = PlaytissAssetReferences['actionReferences'] extends UserActionId[] | undefined ? true : never
 type _hasVersionReferences
-  = PlaytissAssetReferences['versionReferences'] extends VersionId[] | undefined ? true : never
+  = PlaytissAssetReferences['versionReferences'] extends RevisionId[] | undefined ? true : never
 
 type _witnesses = [
   _widensCore,
@@ -33,7 +33,7 @@ describe('PlaytissAssetReferences', () => {
     const refs: PlaytissAssetReferences = {
       assetReferences: ['bafyreiabc' as AssetId],
       actionReferences: ['019d9f37-9321-85a2-8bcc-23dd72000001' as UserActionId],
-      versionReferences: ['019d9f37-9321-85a2-8bcc-23dd72000002' as VersionId],
+      versionReferences: ['019d9f37-9321-85a2-8bcc-23dd72000002' as RevisionId],
     }
     expect(refs.assetReferences).toHaveLength(1)
     expect(refs.actionReferences).toHaveLength(1)

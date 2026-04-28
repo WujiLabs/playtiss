@@ -3,7 +3,7 @@
 // playtiss SDK — the reference Collaboration Protocol implementation.
 //
 // Core vocabulary (TraceId, AssetId, AssetValue, DictAsset, CID, computeHash,
-// Graph, TaskLike/VersionLike/ActionLike, StorageProvider, etc.) lives in
+// Graph, TaskLike/RevisionLike/ActionLike, StorageProvider, etc.) lives in
 // @playtiss/core (MIT). Import directly from there:
 //
 //   import type { AssetId, TraceId, DictAsset } from '@playtiss/core'

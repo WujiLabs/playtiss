@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/client-s3'
 import type { AssetId } from '@playtiss/core'
 
-import type { UserActionId, VersionId } from '../../types/playtiss.js'
+import type { UserActionId, RevisionId } from '../../types/playtiss.js'
 import {
   getS3Client,
   getS3ObjectParams,
@@ -235,13 +235,13 @@ export async function saveAssetToActionReferences(
 // Save asset-to-version references
 export async function saveAssetToVersionReferences(
   parentAssetId: AssetId,
-  versionIds: VersionId[],
+  versionIds: RevisionId[],
 ): Promise<void> {
   if (versionIds.length === 0) return
 
   const params = getReferencesParams(parentAssetId, 'versions')
 
-  // VersionIds are UUIDs (36 chars fixed-length), so we can use efficient binary format
+  // RevisionIds are UUIDs (36 chars fixed-length), so we can use efficient binary format
   const VERSION_ID_LENGTH = 36
   const buffer = new Uint8Array(versionIds.length * VERSION_ID_LENGTH)
 
