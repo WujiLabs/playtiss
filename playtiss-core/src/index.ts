@@ -5,8 +5,8 @@
 //
 // Content-addressed DAG primitives where human and AI nodes are peer editors.
 // This package defines the TYPE RELATIONSHIPS of the protocol (TaskLike,
-// VersionLike, ActionLike generics) plus the concrete primitives needed to
-// compute CIDs and serialize graphs. Concrete workflow types (Task, Version,
+// RevisionLike, ActionLike generics) plus the concrete primitives needed to
+// compute CIDs and serialize graphs. Concrete workflow types (Task, Revision,
 // Action) are implemented by consumers (e.g. the `playtiss` SDK) that extend
 // the relationship generics.
 //
@@ -46,18 +46,18 @@ export { dagJSON, decodeFromString, encodeToString } from './json.js'
 export type {
   ActionId,
   ActionLike,
+  ActorId,
   DefaultAction,
+  DefaultRevision,
   DefaultTask,
-  DefaultVersion,
   NamespacedActionId,
-  ScopeId,
+  RevisionId,
+  RevisionLike,
   SystemActionId,
   TaskId,
   TaskLike,
   UserActionId,
   ValueOrLink,
-  VersionId,
-  VersionLike,
 } from './task.js'
 export { isSystemAction } from './task.js'
 

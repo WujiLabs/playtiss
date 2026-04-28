@@ -11,18 +11,18 @@ import type { AssetId } from '../asset-id.js'
 import type { DictAsset } from '../asset-value.js'
 import type {
   ActionId,
+  ActorId,
   DefaultAction,
+  DefaultRevision,
   DefaultTask,
-  DefaultVersion,
   NamespacedActionId,
-  ScopeId,
+  RevisionId,
+  RevisionLike,
   SystemActionId,
   TaskId,
   TaskLike,
   UserActionId,
   ValueOrLink,
-  VersionId,
-  VersionLike,
 } from '../task.js'
 import { isSystemAction } from '../task.js'
 
@@ -33,13 +33,13 @@ import { isSystemAction } from '../task.js'
 
 describe('relationship generic conformance (type-level)', () => {
   it('DefaultTask satisfies TaskLike', () => {
-    type _ok = DefaultTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> ? true : never
+    type _ok = DefaultTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> ? true : never
     const witness: _ok = true
     expect(witness).toBe(true)
   })
 
-  it('DefaultVersion satisfies VersionLike', () => {
-    type _ok = DefaultVersion extends VersionLike<VersionId, TaskId, ValueOrLink<DictAsset>> ? true : never
+  it('DefaultRevision satisfies RevisionLike', () => {
+    type _ok = DefaultRevision extends RevisionLike<RevisionId, TaskId, ValueOrLink<DictAsset>> ? true : never
     const witness: _ok = true
     expect(witness).toBe(true)
   })
@@ -51,11 +51,11 @@ describe('relationship generic conformance (type-level)', () => {
   })
 
   it('a third-party Task shape with extra fields still satisfies TaskLike', () => {
-    interface ThirdPartyTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> {
+    interface ThirdPartyTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> {
       my_custom_field: string
       another_extra: number
     }
-    type _ok = ThirdPartyTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> ? true : never
+    type _ok = ThirdPartyTask extends TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> ? true : never
     const witness: _ok = true
     expect(witness).toBe(true)
   })
@@ -103,11 +103,11 @@ describe('imports compile (smoke test)', () => {
     const _typesReachable: [
       AssetId | undefined,
       TaskId | undefined,
-      VersionId | undefined,
+      RevisionId | undefined,
       UserActionId | undefined,
       SystemActionId | undefined,
       ActionId | undefined,
-      ScopeId | undefined,
+      ActorId | undefined,
     ] = [undefined, undefined, undefined, undefined, undefined, undefined, undefined]
     expect(_typesReachable.length).toBe(7)
   })

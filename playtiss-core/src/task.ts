@@ -3,7 +3,7 @@
 //
 // Relationship generics for the Collaboration Protocol.
 //
-// This module defines HOW Tasks, Versions, and Actions relate to each other —
+// This module defines HOW Tasks, Revisions, and Actions relate to each other —
 // not their concrete field layouts. Consumers (the playtiss SDK, or a third-
 // party harness) provide their own concrete types that satisfy these generic
 // constraints, and TypeScript verifies conformance at compile time.
@@ -11,7 +11,7 @@
 // Example conformance:
 //
 //   import type { TaskLike } from '@playtiss/core/task'
-//   type MyTask = TaskLike<MyTaskId, MyActionId, MyInput, MyVersionId> & {
+//   type MyTask = TaskLike<MyTaskId, MyActionId, MyInput, MyRevisionId> & {
 //     // your own extra fields
 //   }
 //
@@ -27,7 +27,7 @@ import type { TraceId } from './trace-id.js'
 // Branded identifier types
 // ----------------------------------------------------------------------------
 
-export type VersionId = TraceId & { readonly __sub_brand: 'VersionId' }
+export type RevisionId = TraceId & { readonly __sub_brand: 'RevisionId' }
 export type TaskId = TraceId & { readonly __sub_brand: 'TaskId' }
 export type UserActionId = TaskId & { readonly __sub_sub_brand: 'UserActionId' }
 
@@ -52,11 +52,11 @@ export type SystemActionId = NamespacedActionId<'core'>
 export type ActionId = UserActionId | SystemActionId
 
 /**
- * Scope identifier — an implementation-defined namespace that groups related
- * tasks. Semantics (multi-tenant, per-project, single-scope, etc.) are up to
+ * Actor identifier — an implementation-defined namespace that groups related
+ * tasks. Semantics (multi-tenant, per-project, single-actor, etc.) are up to
  * the implementer.
  */
-export type ScopeId = string
+export type ActorId = string
 
 // ----------------------------------------------------------------------------
 // Inline-or-link primitive
@@ -76,14 +76,14 @@ export type ValueOrLink<T> = T | AssetId
  * Structural minimum of a Task in the Collaboration Protocol.
  *
  * A Task is the unit "action + input" — a named operation that can be
- * executed to produce a Version. Any concrete Task definition must at
+ * executed to produce a Revision. Any concrete Task definition must at
  * minimum identify itself, name an action, carry its direct inputs, and
- * point to a current version.
+ * point to a current revision.
  *
  * SDK / third-party tools extend this with their own concrete types:
  *
- *   type ConcreteTask = TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId> & {
- *     scope_id: ScopeId
+ *   type ConcreteTask = TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId> & {
+ *     scope_id: ActorId
  *     name: string
  *     description: string
  *     created_at: number
@@ -94,30 +94,30 @@ export interface TaskLike<
   TId,
   TActionId,
   TInput,
-  TVersionId,
+  TRevisionId,
 > {
   id: TId
   action_id: TActionId
   direct_inputs: TInput
-  current_version_id: TVersionId
+  current_version_id: TRevisionId
 }
 
 /**
- * Structural minimum of a Version in the Collaboration Protocol.
+ * Structural minimum of a Revision in the Collaboration Protocol.
  *
- * A Version is a point-in-time record produced by (or associated with) a
- * Task. Versions form the parentage chain that makes fork/replay and
+ * A Revision is a point-in-time record produced by (or associated with) a
+ * Task. Revisions form the parentage chain that makes fork/replay and
  * Fresh/Stale propagation meaningful.
  */
-export interface VersionLike<
-  TVersionId,
+export interface RevisionLike<
+  TRevisionId,
   TTaskId,
   TAsset,
 > {
-  id: TVersionId
+  id: TRevisionId
   task_id: TTaskId
   asset: TAsset | null
-  parent_version_id: TVersionId | null
+  parent_version_id: TRevisionId | null
 }
 
 /**
@@ -157,18 +157,18 @@ export function isSystemAction(actionId: unknown): actionId is SystemActionId {
 
 /**
  * Concrete form of TaskLike parameterized by Playtiss's default primitive
- * choices (TaskId, ActionId, ValueOrLink<DictAsset>, VersionId).
+ * choices (TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId).
  *
  * Use this when you want a ready-made Task shape satisfying the protocol.
  * Consumers who need different primitives (e.g., a distinct AssetId type
  * or a streaming input) should instantiate TaskLike directly.
  */
-export type DefaultTask = TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, VersionId>
+export type DefaultTask = TaskLike<TaskId, ActionId, ValueOrLink<DictAsset>, RevisionId>
 
 /**
- * Concrete form of VersionLike parameterized by Playtiss's defaults.
+ * Concrete form of RevisionLike parameterized by Playtiss's defaults.
  */
-export type DefaultVersion = VersionLike<VersionId, TaskId, ValueOrLink<DictAsset>>
+export type DefaultRevision = RevisionLike<RevisionId, TaskId, ValueOrLink<DictAsset>>
 
 /**
  * Concrete form of ActionLike parameterized by DefaultTask.
