@@ -1,81 +1,51 @@
 // Copyright (c) 2026 Wuji Labs Inc
-import * as dagJSON from '@ipld/dag-json'
+//
+// SDK wrapper around `@playtiss/core`'s parameterized
+// store / load / resolve. The core helpers take an explicit
+// StorageProvider; this layer resolves the global provider via
+// `getStorageProvider()` and forwards. Existing SDK consumers
+// (pipeline-runner, cli, typescript-worker, graphql-server) keep
+// using the no-arg form unchanged.
+//
+// New code that doesn't depend on the SDK's global provider should
+// import directly from `@playtiss/core` and pass an explicit
+// StorageProvider — see core's `asset-store/operations.ts`.
+
 import type { AssetId, AssetValue, DictAsset, ValueOrLink } from '@playtiss/core'
-import { cidToAssetId, computeTopBlock } from '@playtiss/core'
-import * as Block from 'multiformats/block'
-import { CID } from 'multiformats/cid'
-import * as raw from 'multiformats/codecs/raw'
-import { sha256 } from 'multiformats/hashes/sha2'
+import {
+  load as coreLoad,
+  resolve as coreResolve,
+  store as coreStore,
+} from '@playtiss/core'
 
-import { fetchBuffer, hasBuffer, saveBuffer } from './storage-factory.js'
-
-function collectCIDLinks(value: unknown): AssetId[] {
-  if (value instanceof CID) return [cidToAssetId(value)]
-  if (value instanceof Uint8Array) return []
-  if (Array.isArray(value)) return value.flatMap(v => collectCIDLinks(v))
-  if (value !== null && typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).flatMap(v => collectCIDLinks(v))
-  }
-  return []
-}
+import { getStorageProvider } from './storage-factory.js'
 
 /**
- * Content-address and persist a single block for the given value.
- *
- * Two concerns, intentionally separated:
- *
- * 1. The returned CID is always the Merkle-ized hash (computed via
- *    `computeHash`) — stable regardless of whether nested sub-values were
- *    passed inline or as CID links. Two equivalent logical values always
- *    resolve to the same CID, enabling deduplication.
- *
- * 2. The persisted bytes are the INLINE `dag-json` encoding of `input`
- *    (only top-level CID values are embedded as links; nested objects and
- *    arrays are NOT recursively split into separate blocks). One I/O per
- *    call. `load(id)` returns what was written — use `resolve()` to
- *    materialize any CID links the caller chose to include.
- *
- * `assetReferences` tracks only CID links explicitly present in the original
- * input (i.e. values the caller already stored and linked), not internally-
- * generated sub-object CIDs.
+ * Persist an AssetValue using the globally-registered StorageProvider.
+ * Thin wrapper over `@playtiss/core`'s `store()` — see core for full
+ * semantics (Merkle CID + inline bytes, dedup via hasBuffer).
  */
 export async function store(input: AssetValue): Promise<AssetId> {
-  if (input instanceof CID) return cidToAssetId(input)
-  // CID is computed via Merkle hash (stable whether sub-values are inline or linked)
-  const { cid } = await computeTopBlock(input)
-  const id = cidToAssetId(cid)
-  if (!(await hasBuffer(id))) {
-    // Intentionally store the inline encoding (not Merkle-ized), so load()
-    // returns the object as-written and no sub-blocks need additional I/O.
-    const bytes = input instanceof Uint8Array
-      ? Block.encode({ value: input, codec: raw, hasher: sha256 }).then(b => b.bytes)
-      : Promise.resolve(dagJSON.encode(input))
-    const refs = collectCIDLinks(input)
-    await saveBuffer(await bytes, id, refs.length ? { assetReferences: refs } : undefined)
-  }
-  return id
-}
-
-export async function load(id: AssetId): Promise<AssetValue> {
-  const cid = CID.parse(id)
-  const buffer = await fetchBuffer(id)
-  return cid.code === raw.code ? buffer : dagJSON.decode(buffer) as AssetValue
+  return coreStore(input, await getStorageProvider())
 }
 
 /**
- * Fully materialize a value by recursively resolving all CID links.
- * Use `resolve(await load(id))` to get the original nested structure back.
+ * Load an asset by id using the globally-registered StorageProvider.
+ * See `@playtiss/core`'s `load()` — returns AssetValue with AssetLinks
+ * inline; pass through `resolve()` to materialize.
+ */
+export async function load(id: AssetId): Promise<AssetValue> {
+  return coreLoad(id, await getStorageProvider())
+}
+
+/**
+ * Fully materialize a value by recursively resolving all CID links
+ * via the globally-registered StorageProvider. Use
+ * `resolve(await load(id))` to get the original nested structure
+ * back. Thin wrapper over `@playtiss/core`'s `resolve()`.
  */
 export async function resolve(value: AssetValue): Promise<AssetValue> {
-  if (value instanceof CID) {
-    const loaded = await load(cidToAssetId(value))
-    return resolve(loaded)
-  }
-  if (value instanceof Uint8Array || value === null || typeof value !== 'object') return value
-  if (Array.isArray(value)) return Promise.all(value.map(v => resolve(v)))
-  return Object.fromEntries(
-    await Promise.all(Object.entries(value).map(async ([k, v]) => [k, await resolve(v)])),
-  )
+  return coreResolve(value, await getStorageProvider())
 }
 
 export async function toLink<T extends DictAsset>(v: ValueOrLink<T>): Promise<AssetId> {

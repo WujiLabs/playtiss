@@ -6,6 +6,7 @@ import * as raw from 'multiformats/codecs/raw'
 import { describe, expect, it } from 'vitest'
 
 import { isAssetId } from '../asset-id.js'
+import type { AssetValue } from '../asset-value.js'
 import { cidToAssetId, computeHash, computeTopBlock } from '../hash.js'
 
 describe('computeHash', () => {
@@ -87,6 +88,29 @@ describe('computeHash', () => {
     // Sanity: directly-linked form differs (it's a string, not a CID)
     const idStringLinked = await computeHash(outerLinked)
     expect(idInline).not.toBe(idStringLinked)
+  })
+
+  it('Merkle-izes inline binary (same hash whether inline Uint8Array or CID link)', async () => {
+    const buf = new Uint8Array([10, 20, 30])
+    const bufCid = CID.parse(await computeHash(buf))
+    const id1 = await computeHash({ data: buf })
+    const id2 = await computeHash({ data: bufCid })
+    expect(id1).toBe(id2)
+  })
+
+  it('Merkle-izes inline arrays (same hash whether inline array or CID link)', async () => {
+    const arr: AssetValue = [1, 2, 3]
+    const arrCid = CID.parse(await computeHash(arr))
+    const id1 = await computeHash({ items: arr })
+    const id2 = await computeHash({ items: arrCid })
+    expect(id1).toBe(id2)
+  })
+
+  it('top-level array hashes via dag-json codec', async () => {
+    const id = await computeHash([1, 2, 3])
+    const cid = CID.parse(id)
+    expect(cid.version).toBe(1)
+    expect(cid.code).toBe(dagJSON.code)
   })
 })
 

@@ -30,7 +30,8 @@ export type {
 } from './asset-value.js'
 export { CID, isLink } from './asset-value.js'
 
-// ---- asset-store (storage contract) --------------------------------------
+// ---- asset-store (storage contract + operations) --------------------------
+export { computeStorageBlock, load, resolve, store } from './asset-store/index.js'
 export type { AssetReferences, StorageProvider } from './asset-store/index.js'
 
 // ---- graph ----------------------------------------------------------------

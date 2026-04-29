@@ -43,9 +43,25 @@ async function flatten(value: AssetValue): Promise<AssetValue> {
 /**
  * Compute the top-level content-addressed block for any AssetValue.
  *
- * Applies full Merkle-ization: every nested object/array/binary is replaced
- * by its CID before encoding the top-level block. Returns the CID, encoded
- * bytes, and the flattened value (with sub-values as CID links).
+ * Storage shape: SHALLOW. Returns ONE block — `{cid, bytes, flatValue}`
+ * where `bytes` is the encoded TOP-level block ONLY. Sub-blocks
+ * produced inside `flatten()` for nested objects/arrays/binaries are
+ * NOT returned and NOT saved anywhere; their bytes are discarded
+ * after their CID is computed (line 28, 33, 40 above). Caller
+ * persists `bytes` (one blob); intermediate encodings vanish.
+ *
+ * Hash shape: MERKLE. Every nested level is recursively encoded via
+ * `Block.encode` and replaced by its CID inside `flatValue` before
+ * the top encoding. The CID is therefore content-consistent with
+ * deep storage — same logical input produces the same CID regardless
+ * of whether sub-fields were provided inline or as CID links — but
+ * the caller never has to manage a tree of blobs.
+ *
+ * For round-trip storage where `load()` returns the same dict
+ * structure that was passed in (no further link resolution required),
+ * use `store()` / `computeStorageBlock()` from
+ * `asset-store/operations.js`. Those use this CID for stability but
+ * write the inline encoding for `bytes`.
  *
  * Pure function — no storage side effects.
  */
@@ -77,13 +93,18 @@ export async function computeTopBlock(input: AssetValue): Promise<{
 /**
  * Compute the canonical content-addressed hash (CID) of any AssetValue.
  *
- * Uses full Merkle-ization: nested objects, arrays, and binary buffers are
- * recursively hashed as separate blocks. The returned CID depends on the
- * logical content, not on whether sub-values were provided inline or as CID links.
+ * Hash shape: MERKLE — nested objects, arrays, and binary buffers are
+ * recursively hashed as separate sub-blocks. The returned CID depends
+ * on logical content, not on whether sub-values were provided inline
+ * or as CID links.
  *
- * Canonical ordering is guaranteed by the dag-json spec: object keys are
- * sorted by UTF-8 byte comparison during encoding, so insertion order does
- * not affect the hash.
+ * Storage shape: NONE — pure function, no blocks are returned or
+ * persisted. If you need bytes-to-store, use `computeTopBlock` (one
+ * shallow block) or `store()` (saves via a StorageProvider).
+ *
+ * Canonical ordering is guaranteed by the dag-json spec: object keys
+ * are sorted by UTF-8 byte comparison during encoding, so insertion
+ * order does not affect the hash.
  *
  * Pure function — no storage side effects.
  */
