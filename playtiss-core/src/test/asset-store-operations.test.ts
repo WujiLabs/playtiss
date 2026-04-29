@@ -12,7 +12,6 @@ import * as raw from 'multiformats/codecs/raw'
 import { describe, expect, it } from 'vitest'
 
 import type { AssetId } from '../asset-id.js'
-import { type AssetValue, CID } from '../asset-value.js'
 import {
   computeStorageBlock,
   load,
@@ -20,6 +19,7 @@ import {
   store,
 } from '../asset-store/operations.js'
 import type { StorageProvider } from '../asset-store/storage-provider.js'
+import { type AssetValue, CID } from '../asset-value.js'
 
 // ---- In-memory storage provider for tests ----
 function makeMemoryStore(): { data: Map<string, Uint8Array>, provider: StorageProvider } {
@@ -44,8 +44,14 @@ describe('computeStorageBlock', () => {
   it('is pure — does not call a StorageProvider', async () => {
     let called = false
     const spy: StorageProvider = {
-      async hasBuffer() { called = true; return false },
-      async fetchBuffer() { called = true; return new Uint8Array() },
+      async hasBuffer() {
+        called = true
+        return false
+      },
+      async fetchBuffer() {
+        called = true
+        return new Uint8Array()
+      },
       async saveBuffer() { called = true },
     }
     // computeStorageBlock takes no provider, but verify the function
