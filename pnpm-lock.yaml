@@ -461,12 +461,18 @@ importers:
 
   playtiss-proxy:
     dependencies:
+      '@ipld/dag-json':
+        specifier: 'catalog:'
+        version: 10.2.7
       '@playtiss/core':
         specifier: workspace:*
         version: link:../playtiss-core
       better-sqlite3:
         specifier: 'catalog:'
         version: 11.10.0
+      multiformats:
+        specifier: 'catalog:'
+        version: 13.4.2
     devDependencies:
       '@eslint/js':
         specifier: 'catalog:'
