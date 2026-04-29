@@ -27,6 +27,7 @@ Playtiss uses a decoupled Engine/Worker architecture with:
 | Package | License | Description |
 |---------|---------|-------------|
 | `playtiss-core/` (@playtiss/core) | MIT | Collaboration Protocol vocabulary — branded types, CID hashing, Graph primitives, relationship generics. Published to npm. |
+| `playtiss-proxy/` (@playtiss/retcon) | MIT | Retcon CLI + daemon — recording / replay HTTP proxy and MCP fork tools (`fork_list`, `fork_show`, `fork_bookmark`, `fork_back`) for Claude Code. The canonical Observer Actor instantiation of the Collaboration Protocol. Published to npm. |
 | `src/` (playtiss) | CC BY-NC 4.0 | Reference SDK — asset-store with local/S3/bridge backends, concrete Task/Version/Action, pipeline types. Consumes `@playtiss/core`. |
 | `graphql-server/` | CC BY-NC 4.0 | Central GraphQL API server (SQLite backend) |
 | `pipeline-runner/` | CC BY-NC 4.0 | Workflow execution engine with event-driven scheduling |
