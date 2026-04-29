@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-04-29
+
+### `store / load / resolve` moved from the SDK to `@playtiss/core`
+
+The asset-store operations (`store`, `load`, `resolve`, plus a new pure helper
+`computeStorageBlock` that returns `{cid, bytes}` without invoking the
+provider) are now part of `@playtiss/core` 0.2.0-alpha.0. They take a
+`StorageProvider` as an explicit parameter, so any tool that depends on
+`@playtiss/core` (including the new `@playtiss/retcon` 0.3.0-alpha.0) can use
+them without the SDK or its global-singleton storage.
+
+### Changed (SDK — `playtiss` 0.5.1)
+
+- **`src/asset-store/index.ts` is now a thin wrapper.** `store / load / resolve`
+  forward to `@playtiss/core`'s parameterized helpers using the global
+  `StorageProvider` resolved by `getStorageProvider()`. The public surface is
+  unchanged: `setCustomStorageProvider` / `setLocalWebStorageProvider` /
+  `setS3WebStorageProvider` / `setBridgeStorageProvider` / `resetStorageProvider`
+  still register the global; `toLink` / `fromLink` keep their existing
+  semantics; `cidToAssetId` and `computeHash` are re-exported.
+- **Direct `@ipld/dag-json` and `multiformats` imports removed from
+  `src/asset-store/index.ts`.** Encapsulated inside `@playtiss/core` now.
+- **The store + resolve test suites moved to
+  `playtiss-core/src/test/asset-store-operations.test.ts`** and were adapted
+  to the parameterized API. `src/test/normalize-resolve.test.ts` is now a
+  ~30-line smoke test that confirms the SDK's wrapper still routes through
+  to core via the global.
+
+### For consumers
+
+No API changes. Existing imports — `import { store, load, resolve } from
+'playtiss/asset-store'` — keep working. `pipeline-runner`, `cli`,
+`typescript-worker`, and `graphql-server` use the SDK's wrapper as before.
+
 ## [0.5.0] - 2026-04-18
 
 ### New package: `@playtiss/core` (MIT-licensed)

@@ -26,6 +26,7 @@ npm install @playtiss/core
 | **Graph primitives** | `Graph`, `GraphNode`, `GraphEdge` (flat ReactFlow-style edges) |
 | **Relationship generics** | `TaskLike`, `VersionLike`, `ActionLike`, `DefaultTask`, `DefaultVersion`, `DefaultAction`, `isSystemAction` |
 | **Storage interface** | `StorageProvider`, `AssetReferences` |
+| **Storage operations** | `store`, `load`, `resolve`, `computeStorageBlock` (parameterized by a `StorageProvider`) |
 
 ## Quickstart
 
@@ -65,6 +66,28 @@ const graph: Graph = {
   },
 }
 ```
+
+### Persist + retrieve content-addressed assets
+
+```ts
+import { store, load, resolve } from '@playtiss/core'
+import type { StorageProvider } from '@playtiss/core'
+
+// Implement the byte-level storage contract for your environment
+// (SQLite, IndexedDB, S3, an in-memory Map, etc).
+const provider: StorageProvider = mySqliteOrFsOrS3Adapter
+
+const id = await store({ role: 'user', content: 'hello' }, provider)
+// → "bafyrei..."  Merkle CID; same logical input → same CID, idempotent.
+
+const value = await load(id, provider)
+// → AssetValue with CID instances inline (links not pre-resolved).
+
+const fullyMaterialized = await resolve(value, provider)
+// → recursively follows every CID link until no links remain.
+```
+
+`store` writes ONE blob per call (the inline encoding); the CID is computed Merkle-style so two equivalent logical values produce the same CID regardless of whether sub-fields are inline or already CID-linked. `load` returns `AssetValue` with `CID` instances preserved inline so comparison-only callers don't pay for sub-block I/O. `resolve` is opt-in materialization. There's also `computeStorageBlock(value)` if you need to pre-compute `{cid, bytes}` for a batched write outside the normal `provider.saveBuffer` flow (e.g., inside a sync DB transaction).
 
 ### Conform to the protocol
 
@@ -109,7 +132,9 @@ The SDK (`playtiss`) that implements this vocabulary is CC BY-NC 4.0. The core v
 
 ## Status
 
-`v0.1.0-alpha` — shape may change before `0.1.0`. Pin exact versions if you care about stability during this window.
+`v0.2.0-alpha` — shape may change before `0.2.0`. Pin exact versions if you care about stability during this window.
+
+`store / load / resolve / computeStorageBlock` moved here from the SDK (`playtiss/asset-store`) in 0.2.0-alpha.0. The SDK still exports the same surface as a thin wrapper over the global `StorageProvider` singleton, so existing SDK consumers keep working unchanged.
 
 ## License
 
