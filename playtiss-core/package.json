@@ -1,6 +1,6 @@
 {
   "name": "@playtiss/core",
-  "version": "0.2.0-alpha.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Vocabulary of the Playtiss Collaboration Protocol — content-addressed DAG primitives for human+AI workflows",
   "license": "MIT",
