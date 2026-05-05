@@ -33,7 +33,7 @@ catalog:
   '@types/fs-extra': ^11.0.4
   '@types/jest': ^29.5.12
   '@types/jsonwebtoken': ^9.0.6
-  '@types/node': 24.10.9
+  '@types/node': 24.12.2
   '@vitest/coverage-v8': ^4.1.4
   better-sqlite3: ^11.10.0
   cors: ^2.8.6
