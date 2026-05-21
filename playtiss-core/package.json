@@ -57,6 +57,10 @@
     "./asset-store": {
       "types": "./dist/asset-store/index.d.ts",
       "import": "./dist/asset-store/index.js"
+    },
+    "./channel": {
+      "types": "./dist/channel/index.d.ts",
+      "import": "./dist/channel/index.js"
     }
   },
   "files": [
@@ -76,12 +80,22 @@
     "@ipld/dag-json": "catalog:",
     "multiformats": "catalog:"
   },
+  "peerDependencies": {
+    "better-sqlite3": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@ipld/dag-cbor": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
+    "@types/better-sqlite3": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "better-sqlite3": "catalog:",
     "eslint": "catalog:",
     "globals": "catalog:",
     "typescript": "catalog:",

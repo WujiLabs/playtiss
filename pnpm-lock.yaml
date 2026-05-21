@@ -437,12 +437,18 @@ importers:
       '@stylistic/eslint-plugin':
         specifier: 'catalog:'
         version: 5.10.0(eslint@9.39.4(jiti@2.6.1))
+      '@types/better-sqlite3':
+        specifier: 'catalog:'
+        version: 7.6.13
       '@types/node':
         specifier: 'catalog:'
         version: 24.10.9
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 4.1.4(vitest@4.1.4)
+      better-sqlite3:
+        specifier: 'catalog:'
+        version: 11.10.0
       eslint:
         specifier: 'catalog:'
         version: 9.39.4(jiti@2.6.1)
