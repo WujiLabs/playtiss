@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyTask } from '../../channel/apply-task.js'
 import { createChannel } from '../../channel/channel.js'
 import { CURRENT_CHANNEL_SCHEMA_VERSION, migrate } from '../../channel/migrate.js'
-import { type Database as DB, type Task, type TaskId, taskRef } from '../../channel/types.js'
+import { type Database as DB, type Task, taskRef } from '../../channel/types.js'
 
 function open(): DB {
   const db = new Database(':memory:')
@@ -88,7 +88,9 @@ describe('channel migrate', () => {
 
 describe('createChannel (happy path)', () => {
   let db: DB
-  beforeEach(() => { db = open() })
+  beforeEach(() => {
+    db = open()
+  })
   afterEach(() => db.close())
 
   it('submit() writes event row + dispatches Tasks + records accept outcomes', async () => {
@@ -173,7 +175,9 @@ describe('createChannel (happy path)', () => {
 
 describe('createChannel — exception outcomes (the L1.2/L1.10 protocol invariants)', () => {
   let db: DB
-  beforeEach(() => { db = open() })
+  beforeEach(() => {
+    db = open()
+  })
   afterEach(() => db.close())
 
   it('projector exception does NOT void the event row', async () => {

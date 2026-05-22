@@ -31,7 +31,6 @@ import {
   type TraceId,
   TraceIdGenerator,
 } from '../trace-id.js'
-
 import { buildTopicIndex, dispatchOrderForTopic, topoSort } from './projector-runner.js'
 import { SqliteStorageProvider } from './storage.js'
 import {

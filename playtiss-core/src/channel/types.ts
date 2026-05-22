@@ -176,9 +176,9 @@ export interface KV<K extends string = string, V = string> {
  * the task id, and the error message), AND continues dispatching downstream
  * Tasks.
  */
-export type Outcome =
-  | { kind: 'accept', taskId: TaskId }
-  | { kind: 'exception', taskId: TaskId, error: string }
+export type Outcome
+  = | { kind: 'accept', taskId: TaskId }
+    | { kind: 'exception', taskId: TaskId, error: string }
 
 /**
  * Returned from {@link Channel.submit}. Carries the recorded event row and

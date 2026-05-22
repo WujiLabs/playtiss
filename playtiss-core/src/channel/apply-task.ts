@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 import { computeHash } from '../hash.js'
-
 import type { ActionId, TaskId, TaskInput } from './types.js'
 
 /**

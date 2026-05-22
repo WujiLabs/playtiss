@@ -9,7 +9,6 @@
 
 import type { AssetId } from '../asset-id.js'
 import type { AssetReferences, StorageProvider } from '../asset-store/index.js'
-
 import type { Database } from './types.js'
 
 export class SqliteStorageProvider implements StorageProvider {
