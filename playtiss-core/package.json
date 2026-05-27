@@ -74,7 +74,8 @@
     "prebuild": "npm run clean",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "node -e \"if(!String(process.env.npm_config_user_agent||'').startsWith('pnpm')){console.error('\\x1b[31m✗ Use `pnpm publish`, not `npm publish`. npm does NOT resolve pnpm catalog: dep specifiers — we shipped @playtiss/core@0.3.0 broken on 2026-05-27 because of this.\\x1b[0m');process.exit(1)}\""
   },
   "dependencies": {
     "@ipld/dag-json": "catalog:",
